@@ -317,108 +317,72 @@ confidence: 0-100 integer. reason: max 10 words in English.`;
 }
 
 // ── MM2 VALUES SYNC ──────────────────────────────────────────
-// Sources par ordre de priorité : Murder Mystery 2 Value List (mm2v.com) → Cosmic Values → hardcoded fallback
+// Source 1 : bloxultra.com (API live officielle) → Source 2 : hardcoded fallback
 async function fetchMM2Values() {
   let synced = 0;
   const stmt = db.prepare(`INSERT INTO weapon_values (name,value,tier,updated_at) VALUES (?,?,?,strftime('%s','now'))
     ON CONFLICT(name) DO UPDATE SET value=excluded.value,tier=excluded.tier,updated_at=excluded.updated_at`);
 
-  // ── Source 1 : murderr.mystery2.fandom-style JSON / mm2v.com API
+  // ── Source 1 : bloxultra.com API ─────────────────────────
   try {
-    const r = await axios.get('https://mm2.fandom.com/api/v1/Articles/AsSimpleJson?id=137', { timeout: 8000 });
-    // fandom ne donne pas les values directement, skip
-  } catch {}
-
-  // ── Source 2 : mm2values.com (scraping JSON non-officiel)
-  try {
-    const r = await axios.get('https://www.mm2values.com/api/values', { timeout: 8000 });
+    const r = await axios.get('https://bloxultra.com/api/values/mm2', {
+      timeout: 10000,
+      headers: { 'User-Agent': 'WenzyBot/3.0', 'Accept': 'application/json' },
+    });
     const data = r.data;
-    // mm2values.com peut retourner soit un tableau, soit {items:[...]}, soit {godlys:{...}, chromas:{...}}
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        if (item.name && (item.value ?? item.demand) > 0) {
-          stmt.run(item.name, Math.round(item.value ?? item.demand), item.tier ?? 'godly');
-          synced++;
+    // bloxultra renvoie typiquement : { items: [...] } ou un tableau direct
+    // Chaque item : { name, value, type/tier, demand, ... }
+    const list = Array.isArray(data) ? data : (data?.items ?? data?.weapons ?? data?.data ?? []);
+    if (Array.isArray(list) && list.length > 0) {
+      for (const item of list) {
+        const name = item.name ?? item.Name ?? item.weapon_name;
+        const val  = Number(item.value ?? item.Value ?? item.demand ?? item.price ?? 0);
+        // tier mapping : bloxultra utilise "type" ou "tier"
+        const rawTier = (item.type ?? item.tier ?? item.rarity ?? 'godly').toLowerCase();
+        const tier = (['ancient','chroma','godly','legendary','epic','rare','uncommon','common'].includes(rawTier))
+          ? rawTier : 'godly';
+        if (name && val > 0) { stmt.run(name, Math.round(val), tier); synced++; }
+      }
+    } else if (typeof data === 'object' && !Array.isArray(data)) {
+      // Format plat : { "Corrupt": { value: 90, tier: "godly" }, ... }
+      for (const [name, info] of Object.entries(data)) {
+        if (name === 'items' || name === 'data' || name === 'status') continue;
+        const val = Number(info?.value ?? info?.demand ?? (typeof info === 'number' ? info : 0));
+        if (name && val > 0) {
+          const rawTier = (info?.tier ?? info?.type ?? 'godly').toLowerCase();
+          const tier = (['ancient','chroma','godly','legendary','epic','rare','uncommon','common'].includes(rawTier)) ? rawTier : 'godly';
+          stmt.run(name, Math.round(val), tier); synced++;
         }
       }
-    } else if (data?.items && Array.isArray(data.items)) {
-      for (const item of data.items) {
-        if (item.name && item.value > 0) { stmt.run(item.name, Math.round(item.value), item.tier ?? 'godly'); synced++; }
-      }
-    } else if (typeof data === 'object') {
-      // Format { "Corrupt": { value: 90, tier: "godly" }, ... }
-      for (const [name, info] of Object.entries(data)) {
-        const val = info?.value ?? info?.demand ?? (typeof info === 'number' ? info : 0);
-        if (name && val > 0) { stmt.run(name, Math.round(val), info?.tier ?? 'godly'); synced++; }
-      }
     }
-    if (synced > 0) { console.log(`[Values] mm2values.com: ${synced} armes`); return; }
-  } catch (e) { console.warn('[Values] mm2values.com failed:', e.message); }
-
-  // ── Source 3 : cosmic-values-like endpoint
-  try {
-    const r = await axios.get('https://mm2values.info/api/list', { timeout: 8000, headers: { 'User-Agent': 'WenzyBot/3.0' } });
-    const data = r.data;
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        if (item.name && item.value > 0) { stmt.run(item.name, Math.round(item.value), item.type ?? item.tier ?? 'godly'); synced++; }
-      }
+    if (synced > 0) {
+      console.log(`[Values] ✅ bloxultra.com: ${synced} armes synchronisées`);
+      return;
     }
-    if (synced > 0) { console.log(`[Values] mm2values.info: ${synced} armes`); return; }
-  } catch (e) { console.warn('[Values] mm2values.info failed:', e.message); }
+    console.warn('[Values] bloxultra.com: réponse vide ou format inattendu, fallback hardcoded');
+  } catch (e) {
+    console.warn(`[Values] bloxultra.com failed: ${e.message} — fallback hardcoded`);
+  }
 
-  // ── Source 4 : Hardcoded values à jour (Novembre 2024)
-  // Source : communauté MM2 trading, valeurs consensus
+  // ── Source 2 : Hardcoded fallback (valeurs consensus communauté MM2) ──
   const hardcoded = [
-    // Ancient
     ['Ancient Seer', 200, 'ancient'],
-    // Chroma
-    ['Chroma Seer', 165, 'chroma'],
-    ['Chroma Harvester', 150, 'chroma'],
-    ['Chroma Lightbringer', 145, 'chroma'],
-    ['Chroma Luger', 125, 'chroma'],
-    ['Chroma Boneblade', 115, 'chroma'],
-    ['Chroma Godly', 100, 'chroma'],
-    // Godly - tier 1
-    ['Prism', 95, 'godly'],
-    ['Corrupt', 90, 'godly'],
-    ['Hallowscythe', 82, 'godly'],
-    ['Elderwood Scythe', 85, 'godly'],
-    ['Blue Seer', 72, 'godly'],
-    // Godly - tier 2
-    ['Batwing', 62, 'godly'],
-    ['Shark', 57, 'godly'],
-    ['Icicle', 52, 'godly'],
-    ['Laser', 50, 'godly'],
-    ['Candy Cane', 48, 'godly'],
-    ['Pumpkin', 47, 'godly'],
-    ['Eerie', 46, 'godly'],
-    ['Sparkle', 45, 'godly'],
-    ['Ghostblade', 44, 'godly'],
-    ['Silverthorn', 42, 'godly'],
-    // Godly - tier 3
-    ['Raygun', 45, 'godly'],
-    ['Snowcannon', 42, 'godly'],
-    ['Linked', 40, 'godly'],
-    ['Eternal', 40, 'godly'],
-    ['Spirit', 36, 'godly'],
-    ['Soul', 38, 'godly'],
-    ['Beachy', 32, 'godly'],
-    ['Boneblade', 35, 'godly'],
-    ['Gingerblade', 30, 'godly'],
-    ['Harvester', 55, 'godly'],
-    ['Lightbringer', 48, 'godly'],
-    ['Luger', 50, 'godly'],
-    ['Seer', 60, 'godly'],
-    ['Heat', 28, 'godly'],
-    ['Handcuff', 25, 'godly'],
-    ['Fang', 25, 'godly'],
-    ['Clutter', 22, 'godly'],
-    ['Brush', 20, 'godly'],
-    ['Wood', 15, 'godly'],
-    // Vintage / Unique
-    ['Chroma Seer I', 170, 'chroma'],
-    ['Godly Knife', 10, 'godly'],
+    ['Chroma Seer', 165, 'chroma'],['Chroma Harvester', 150, 'chroma'],
+    ['Chroma Lightbringer', 145, 'chroma'],['Chroma Luger', 125, 'chroma'],
+    ['Chroma Boneblade', 115, 'chroma'],['Chroma Godly', 100, 'chroma'],
+    ['Prism', 95, 'godly'],['Corrupt', 90, 'godly'],
+    ['Elderwood Scythe', 85, 'godly'],['Hallowscythe', 82, 'godly'],
+    ['Blue Seer', 72, 'godly'],['Batwing', 62, 'godly'],['Seer', 60, 'godly'],
+    ['Shark', 57, 'godly'],['Harvester', 55, 'godly'],['Icicle', 52, 'godly'],
+    ['Laser', 50, 'godly'],['Luger', 50, 'godly'],['Candy Cane', 48, 'godly'],
+    ['Lightbringer', 48, 'godly'],['Pumpkin', 47, 'godly'],['Eerie', 46, 'godly'],
+    ['Raygun', 45, 'godly'],['Sparkle', 45, 'godly'],['Ghostblade', 44, 'godly'],
+    ['Silverthorn', 42, 'godly'],['Snowcannon', 42, 'godly'],['Linked', 40, 'godly'],
+    ['Eternal', 40, 'godly'],['Soul', 38, 'godly'],['Spirit', 36, 'godly'],
+    ['Boneblade', 35, 'godly'],['Beachy', 32, 'godly'],['Gingerblade', 30, 'godly'],
+    ['Heat', 28, 'godly'],['Handcuff', 25, 'godly'],['Fang', 25, 'godly'],
+    ['Clutter', 22, 'godly'],['Brush', 20, 'godly'],['Wood', 15, 'godly'],
+    ['Chroma Seer I', 170, 'chroma'],['Godly Knife', 10, 'godly'],
   ];
   for (const [name, val, tier] of hardcoded) { stmt.run(name, val, tier); synced++; }
   console.log(`[Values] Hardcoded fallback: ${synced} armes`);
@@ -446,13 +410,16 @@ async function updateLeaderboardChannel(guild) {
 }
 
 // ── COIN LEADERBOARD UPDATE ──────────────────────────────────
+// Cherche d'abord un salon "classement-pièces" ou "coins-leaderboard", sinon utilise "leaderboard"
+// NE touche plus au salon boutique pour ne pas écraser l'embed de la boutique
 async function updateShopCoinLeaderboard(guild) {
-  const ch = guild.channels.cache.find(c => c.name.includes('boutique'));
+  const ch = guild.channels.cache.find(c =>
+    c.name.includes('classement') || c.name.includes('leaderboard') || c.name.includes('coins-lb')
+  );
   if (!ch) return;
   const top = db.prepare('SELECT discord_id,coins FROM users ORDER BY coins DESC LIMIT 10').all();
   if (!top.length) return;
   const medals = ['🥇', '🥈', '🥉'];
-  // Supprimer l'ancien embed classement pièces si existe
   const msgs = await ch.messages.fetch({ limit: 20 });
   for (const m of msgs.values()) {
     if (m.author.bot && m.embeds?.[0]?.title?.includes('Classement Pièces')) await m.delete().catch(() => {});
@@ -614,7 +581,7 @@ const commands = [
       log.push('🧹 Nettoyage en cours...');
       const channelNamesToDelete = [
         '🔑┃verification','📌┃règles-et-info','📊┃leaderboard','📋┃logs',
-        '🔗┃link-roblox','🗡️┃post-trades','📬┃poster-un-trade','💰┃price-check',
+        '🔗┃link-roblox','🗡️┃post-trades','📬┃poster-un-trade',
         '🏆┃vouches','🛡️┃middleman-panel','📦┃weapon-values','💬┃général',
         '📺┃vidéos-wenzy','🎙️┃vocal-général','🛒┃boutique',
         '🔒 VÉRIFICATION','📌 WENZY SYSTEM','🗡️ MM2 TRADING','💬 COMMUNAUTÉ','🛒 ECONOMY',
@@ -652,7 +619,7 @@ const commands = [
       const catDefs = [
         { name: '🔒 VÉRIFICATION', chs: [{ name: '🔑┃verification', verif: true }] },
         { name: '📌 WENZY SYSTEM', chs: [{ name: '📌┃règles-et-info' }, { name: '📊┃leaderboard' }, { name: '📋┃logs', staff: true }, { name: '🔗┃link-roblox' }] },
-        { name: '🗡️ MM2 TRADING', chs: [{ name: '🗡️┃post-trades' }, { name: '📬┃poster-un-trade' }, { name: '💰┃price-check' }, { name: '🏆┃vouches' }, { name: '🛡️┃middleman-panel', staff: true }, { name: '📦┃weapon-values' }] },
+        { name: '🗡️ MM2 TRADING', chs: [{ name: '🗡️┃post-trades' }, { name: '📬┃poster-un-trade' }, { name: '🏆┃vouches' }, { name: '🛡️┃middleman-panel', staff: true }, { name: '📦┃weapon-values' }] },
         { name: '💬 COMMUNAUTÉ', chs: [{ name: '💬┃général' }, { name: '📺┃vidéos-wenzy' }, { name: '🎙️┃vocal-général', voice: true }] },
         { name: '🛒 ECONOMY', chs: [{ name: '🛒┃boutique' }] },
       ];
@@ -695,14 +662,6 @@ const commands = [
         log.push('✅ Embed poster-un-trade');
       }
 
-      const priceCh = cm['💰┃price-check'];
-      if (priceCh) {
-        await priceCh.send({ embeds: [new EmbedBuilder().setColor(C.info).setTitle('💰 Price Check MM2')
-          .setDescription(['**Comment utiliser le Price Check ?**', '', '`/trade check offre:<armes> recois:<armes>`', '', '**Exemple :**', '`/trade check offre:Corrupt,Elderwood Scythe recois:Chroma Seer`', '', '**Ce que tu obtiens :**', '• Valeur de chaque arme', '• Total des deux côtés', '• Indication si le trade est **Fair**, **Avantageux** ou **Unfair**', '', '> 💡 Les valeurs sont synchronisées automatiquement depuis MM2Values.'].join('\n'))
-          .setFooter({ text: '0 = valeur inconnue dans la base | /updatevalue pour ajouter' })],
-          components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_price_check_help').setLabel('📖 Guide complet').setStyle(ButtonStyle.Secondary))] });
-        log.push('✅ Embed price-check');
-      }
 
       const valCh = cm['📦┃weapon-values'];
       if (valCh) { await postWeaponValues(valCh); log.push('✅ Valeurs armes'); }
@@ -745,24 +704,11 @@ const commands = [
   // /trade
   { data: new SlashCommandBuilder().setName('trade').setDescription('🗡️ Système de trades MM2')
       .addSubcommand(s => s.setName('post').setDescription('📤 Poster un trade').addStringOption(o => o.setName('offre').setDescription('Armes offertes (virgules)').setRequired(true)).addStringOption(o => o.setName('cherche').setDescription('Ce que tu cherches').setRequired(true)))
-      .addSubcommand(s => s.setName('cancel').setDescription('❌ Annuler ton trade').addIntegerOption(o => o.setName('id').setDescription('ID du trade').setRequired(true)))
-      .addSubcommand(s => s.setName('check').setDescription('⚖️ Price check').addStringOption(o => o.setName('offre').setDescription('Armes offertes').setRequired(true)).addStringOption(o => o.setName('recois').setDescription('Armes reçues').setRequired(true))),
+      .addSubcommand(s => s.setName('cancel').setDescription('❌ Annuler ton trade').addIntegerOption(o => o.setName('id').setDescription('ID du trade').setRequired(true))),
     async execute(interaction) {
       const sub = interaction.options.getSubcommand(), did = interaction.user.id;
       if (sub === 'post') { await interaction.deferReply({ ephemeral: true }); await postTrade(interaction, did, interaction.options.getString('offre'), interaction.options.getString('cherche')); }
       else if (sub === 'cancel') { await interaction.deferReply({ ephemeral: true }); await cancelTrade(interaction, did, interaction.options.getInteger('id')); }
-      else if (sub === 'check') {
-        await interaction.deferReply({ ephemeral: true });
-        const { total: ov, details: od } = calcValue(parseWeapons(interaction.options.getString('offre')));
-        const { total: rv, details: rd } = calcValue(parseWeapons(interaction.options.getString('recois')));
-        const diff = ov - rv, fair = Math.abs(diff) <= 20;
-        await interaction.editReply({ embeds: [new EmbedBuilder().setColor(fair ? C.success : (diff > 0 ? C.danger : C.gold)).setTitle('⚖️ Price Check MM2')
-          .addFields(
-            { name: '📤 Tu offres', value: od.map(w => `${w.name} → **${w.value} val**`).join('\n') + `\n**Total : ${ov} val**`, inline: true },
-            { name: '📥 Tu reçois', value: rd.map(w => `${w.name} → **${w.value} val**`).join('\n') + `\n**Total : ${rv} val**`, inline: true },
-            { name: '⚖️ Résultat', value: (fair ? '⚖️ Fair' : (diff > 0 ? '📉 Unfair — tu perds' : '📈 Avantageux pour toi')) + `\nDiff : ${Math.abs(diff)} val`, inline: false },
-          ).setTimestamp()] });
-      }
     }
   },
 
@@ -906,30 +852,56 @@ const commands = [
     }
   },
 
-  // /shop
-  { data: new SlashCommandBuilder().setName('shop').setDescription('🛒 Boutique — acheter un rôle custom'),
-    async execute(interaction) {
-      await interaction.deferReply({ ephemeral: true });
-      const user = db.prepare('SELECT * FROM users WHERE discord_id=?').get(interaction.user.id);
-      await interaction.editReply({ embeds: [new EmbedBuilder().setColor(C.gold).setTitle('🛒 Boutique Wenzy')
-        .setDescription(['**Articles disponibles :**', '', '🎨 **Rôle couleur custom** — 500 🪙', '> Choisis un nom + couleur (hex) pour ton rôle', '', '👑 **Rôle VIP** — 1000 🪙', '> Rôle VIP permanent avec accès à des avantages', '', '🏆 **Badge Elite** — 10 000 🪙', '> Badge de prestige visible sur ton profil'].join('\n'))
-        .addFields({ name: '🪙 Tes pièces', value: `**${user?.coins ?? 0}**`, inline: true }, { name: '📊 Comment gagner des pièces ?', value: '+5 🪙 par message (1 min cooldown)\n+1 🪙 par minute en vocal\n+50 🪙 par trade complété', inline: false })],
-        components: [new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('shop_role_custom').setLabel('🎨 Rôle Custom (500 🪙)').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId('shop_vip').setLabel('👑 VIP (1000 🪙)').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId('shop_elite_badge').setLabel('🏆 Elite (10 000 🪙)').setStyle(ButtonStyle.Secondary),
-        )] });
-    }
-  },
 ];
 
 // ── SHOP EMBED dans salon boutique ───────────────────────────
 async function postShopEmbed(ch) {
-  const msgs = await ch.messages.fetch({ limit: 10 });
+  const msgs = await ch.messages.fetch({ limit: 20 });
   for (const m of msgs.values()) if (m.author.bot) await m.delete().catch(() => {});
-  await ch.send({ embeds: [new EmbedBuilder().setColor(C.gold).setTitle('🛒 Boutique Wenzy — Achète des rôles customs')
-    .setDescription(['Utilise tes 🪙 pour acheter des rôles et avantages !', '', '🎨 **Rôle couleur custom** — 500 🪙', '👑 **Rôle VIP** — 1 000 🪙', '🏆 **Badge Elite** — 10 000 🪙', '', '**Comment gagner des pièces ?**', '• +5 🪙 par message (cooldown 1 min)', '• +1 🪙 par minute en vocal', '• +50 🪙 par trade complété', '', '_Clique sur le bouton "Boutique" ou tape `/shop` pour acheter._'].join('\n'))
-    .setFooter({ text: 'Classement pièces mis à jour automatiquement' })] });
+
+  // Embed principal
+  const shopEmbed = new EmbedBuilder()
+    .setColor(C.gold)
+    .setTitle('🛒 Boutique Wenzy')
+    .setDescription([
+      '> Utilise tes 🪙 pour acheter des rôles et avantages exclusifs !',
+      '',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '🎨  **Rôle Couleur Custom**',
+      '> Choisis un nom + couleur hex pour ton rôle unique',
+      '> **Prix : 500 🪙**',
+      '',
+      '👑  **Rôle VIP**',
+      '> Accès VIP permanent avec avantages exclusifs',
+      '> **Prix : 1 000 🪙**',
+      '',
+      '💎  **Badge Elite Trader**',
+      '> Badge de prestige, visible sur ton profil et dans les trades',
+      '> **Prix : 10 000 🪙**',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '',
+      '**🪙 Comment gagner des pièces ?**',
+      '```',
+      '+5  🪙  par message (cooldown 1 min)',
+      '+1  🪙  par minute en vocal',
+      '+50 🪙  par trade complété',
+      '```',
+      '',
+      '_Clique directement sur un article pour l\'acheter._',
+    ].join('\n'))
+    .setFooter({ text: 'WenzyBot v3 — Boutique' })
+    .setTimestamp();
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('shop_role_custom').setLabel('🎨 Rôle Custom — 500 🪙').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('shop_vip').setLabel('👑 VIP — 1 000 🪙').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('shop_elite_badge').setLabel('💎 Elite — 10 000 🪙').setStyle(ButtonStyle.Secondary),
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('shop_check_coins').setLabel('🪙 Mes Pièces').setStyle(ButtonStyle.Success),
+  );
+
+  await ch.send({ embeds: [shopEmbed], components: [row, row2] });
 }
 
 // ── BUTTON HANDLER ───────────────────────────────────────────
@@ -953,13 +925,25 @@ async function handleButton(interaction) {
     return interaction.showModal(modal);
   }
 
-  if (customId === 'btn_price_check_help') {
+  // Shop buttons
+  if (customId === 'shop_check_coins') {
     await interaction.deferReply({ ephemeral: true });
-    return interaction.editReply({ embeds: [new EmbedBuilder().setColor(C.info).setTitle('💰 Guide Price Check MM2')
-      .setDescription(['**Commande :** `/trade check offre:<armes> recois:<armes>`', '', '**Exemple :**', '`/trade check offre:Corrupt,Elderwood Scythe recois:Chroma Seer`', '', '**Résultat :**', '• Valeur précise de chaque arme', '• Comparaison des deux côtés du trade', '• ⚖️ Fair = différence ≤ 20 val', '• 📉 Unfair = tu perds de la valeur', '• 📈 Avantageux = tu gagnes de la valeur', '', '**Note :** Les valeurs viennent de MM2Values et se sync toutes les heures.'].join('\n'))] });
+    const u = db.prepare('SELECT * FROM users WHERE discord_id=?').get(user.id);
+    const coins = u?.coins ?? 0;
+    return interaction.editReply({ embeds: [new EmbedBuilder().setColor(C.gold)
+      .setTitle('🪙 Ton Solde')
+      .addFields(
+        { name: '🪙 Pièces', value: `**${coins}**`, inline: true },
+        { name: '✅ Trades', value: `**${u?.trade_count ?? 0}**`, inline: true },
+        { name: '🏆 Rang', value: getRankLabel(u?.rank ?? 'new'), inline: true },
+        { name: '📊 Accès', value: [
+          coins >= 500  ? '✅ Rôle Custom (500 🪙)' : `❌ Rôle Custom — manque **${500 - coins} 🪙**`,
+          coins >= 1000 ? '✅ VIP (1 000 🪙)'       : `❌ VIP — manque **${1000 - coins} 🪙**`,
+          coins >= 10000? '✅ Elite (10 000 🪙)'     : `❌ Elite — manque **${10000 - coins} 🪙**`,
+        ].join('\n'), inline: false },
+      ).setTimestamp()] });
   }
 
-  // Shop buttons
   if (customId === 'shop_role_custom') {
     const user2 = db.prepare('SELECT * FROM users WHERE discord_id=?').get(user.id);
     if (!user2 || user2.coins < 500) { await interaction.deferReply({ ephemeral: true }); return interaction.editReply(`❌ Tu n'as pas assez de pièces. Il te faut **500 🪙** (tu en as **${user2?.coins ?? 0}**).`); }
@@ -1035,7 +1019,28 @@ async function handleButton(interaction) {
       const server = getFreeServer();
       if (server) { db.prepare('UPDATE private_servers SET in_use=1,trade_id=? WHERE id=?').run(tid, server.id); db.prepare('UPDATE trades SET server_link=? WHERE id=?').run(server.link, tid); }
       await thread.send({ embeds: [threadSummaryEmbed(updated, poster, accepter)], components: [threadButtons(tid)] });
-      if (server) await thread.send(`🎮 **Serveur Privé MM2 — Rejoins maintenant :**\n${server.link}`);
+      if (server) {
+        const robloxEmbed = new EmbedBuilder()
+          .setColor(0x00B2FF)
+          .setTitle('🎮 Serveur Privé MM2 — Rejoins maintenant !')
+          .setDescription([
+            '> Clique sur le bouton ci-dessous pour rejoindre le serveur privé.',
+            '',
+            '**Instructions :**',
+            '1. Ouvre Roblox',
+            '2. Clique **Rejoindre** via le lien',
+            '3. Lance le trade avec l\'autre joueur',
+            '4. Screenshot **"YOU HAVE ACCEPTED"** et envoie-le ici',
+          ].join('\n'))
+          .setFooter({ text: 'Le lien est à usage unique pour ce trade.' });
+        const robloxRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel('🕹️ Rejoindre le serveur MM2')
+            .setStyle(ButtonStyle.Link)
+            .setURL(server.link),
+        );
+        await thread.send({ embeds: [robloxEmbed], components: [robloxRow] });
+      }
       await thread.send('📸 **Exemple de screenshot attendu — envoie un screenshot identique après le trade :**');
       if (fs.existsSync(REF_SCREEN_PATH)) await thread.send({ files: [REF_SCREEN_PATH] });
       const mmPanel = guild.channels.cache.find(c => c.name.includes('middleman-panel'));
