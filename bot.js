@@ -224,165 +224,134 @@ function calcValue(names){ let total=0; const details=[]; for(const n of names){
 function getFreeServer(){ return db.prepare('SELECT * FROM private_servers WHERE in_use=0 LIMIT 1').get(); }
 
 // ── CLAUDE VISION ────────────────────────────────────────────
-// Support API key native Anthropic + proxy tier (Elite Keys, etc.)
+// Envoie l'URL Discord directement (source url) — pas de download base64
 async function verifyMM2Screenshot(imageUrl) {
   const KEY      = process.env.ANTHROPIC_API_KEY;
   const BASE_URL = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
   if (!KEY) { console.warn('[Vision] no key — auto-valid'); return { valid: true, reason: 'Vision non configurée — validé auto' }; }
 
-  // Télécharge l'image
-  let b64, mime;
-  try {
-    const img = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
-    b64  = Buffer.from(img.data).toString('base64');
-    mime = (img.headers['content-type'] || 'image/jpeg').split(';')[0].trim();
-    // Discord renvoie parfois webp — Anthropic l'accepte pas, on force jpeg
-    if (!['image/jpeg','image/png','image/gif','image/webp'].includes(mime)) mime = 'image/jpeg';
-  } catch (e) {
-    console.error('[Vision] download failed:', e.message);
-    return { valid: false, reason: `Impossible de télécharger l'image: ${e.message}` };
-  }
+  const SYSTEM   = 'You are a JSON-only API. Never write prose. Only output one valid JSON object, nothing else.';
+  const USR_TEXT = 'Is this a valid MM2 (Murder Mystery 2 Roblox) trade screenshot? valid=true if "YOU HAVE ACCEPTED" or "OTHER PLAYER HAS ACCEPTED" text is visible AND the MM2 trade interface with weapons is shown. valid=false otherwise. Reply ONLY with: {"valid":true,"confidence":90,"reason":"reason max 8 words"}';
 
-  // Prompt ultra strict JSON-only
-  const SYSTEM = 'You are a JSON-only API. You NEVER write prose. Your entire response is always a single valid JSON object on one line, nothing else. No explanation, no markdown, no code blocks.';
-  const USER_TEXT = `Look at this MM2 (Murder Mystery 2 Roblox) trade screenshot. Respond with ONLY this JSON (no text before or after, no backticks):
-{"valid":true,"confidence":95,"reason":"short reason"}
-valid=true if: "YOU HAVE ACCEPTED" text is visible AND MM2 trade UI with weapons shown.
-valid=false if: no trade UI, not MM2, blurry, montage, or screenshot not from MM2.
-confidence: 0-100 integer. reason: max 10 words in English.`;
-
+  // Essai 1 — URL directe (source type url, pas de download)
   try {
     const payload = {
-      model: 'claude-haiku-5-5',  // haiku = moins cher + plus obéissant pour les tâches simples
+      model: 'claude-haiku-5-5',
       max_tokens: 80,
       system: SYSTEM,
-      messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
-        { type: 'text', text: USER_TEXT },
-      ] }],
+      messages: [
+        { role: 'user', content: [
+          { type: 'image', source: { type: 'url', url: imageUrl } },
+          { type: 'text', text: USR_TEXT },
+        ] },
+        { role: 'assistant', content: '{"valid":' },
+      ],
     };
-    // Préfill assistant pour forcer le début du JSON
-    payload.messages.push({ role: 'assistant', content: '{"valid":' });
-
     const res = await axios.post(`${BASE_URL}/v1/messages`, payload, {
       headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      timeout: 20000,
+      timeout: 25000,
     });
+    const raw = '{"valid":' + (res.data.content?.[0]?.text ?? '');
+    console.log('[Vision] url-source raw:', raw.slice(0, 150));
+    const m = raw.match(/\{[^{}]*"valid"\s*:\s*(true|false)[^{}]*\}/);
+    if (m) return JSON.parse(m[0]);
+  } catch (urlErr) {
+    console.warn('[Vision] url-source failed:', urlErr.response?.status, urlErr.message);
+    // Si 401 → auto-valide direct
+    if (urlErr.response?.status === 401) {
+      console.warn('[Vision] 401 — clé invalide. Configure ANTHROPIC_API_KEY dans Railway.');
+      return { valid: true, reason: 'Clé API invalide — validé auto' };
+    }
+  }
 
-    // Reconstruit le JSON depuis le préfill + réponse
-    let raw = res.data.content?.[0]?.text ?? '';
-    raw = '{"valid":' + raw; // préfill + continuation
-    console.log('[Vision] raw response:', raw.slice(0, 200));
+  // Essai 2 — fallback base64 si URL source refusé (certains proxys tier)
+  try {
+    const img = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
+    const b64  = Buffer.from(img.data).toString('base64');
+    let   mime = (img.headers['content-type'] || 'image/jpeg').split(';')[0].trim();
+    if (!['image/jpeg','image/png','image/gif','image/webp'].includes(mime)) mime = 'image/jpeg';
 
-    // Parse robuste : extraire le premier objet JSON valide
-    const jsonMatch = raw.match(/\{[^{}]*"valid"\s*:\s*(true|false)[^{}]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
-
-    // Fallback : essayer de parser directement après nettoyage
-    const cleaned = raw.replace(/```json|```/g, '').replace(/[\r\n]/g, '').trim();
-    // Trouver { ... }
-    const start = cleaned.indexOf('{'), end = cleaned.lastIndexOf('}');
-    if (start !== -1 && end !== -1) return JSON.parse(cleaned.slice(start, end + 1));
-
-    console.warn('[Vision] unparseable response:', raw.slice(0, 300));
-    return { valid: false, reason: 'Réponse API non parseable — réessaie' };
-
+    const payload = {
+      model: 'claude-haiku-5-5',
+      max_tokens: 80,
+      system: SYSTEM,
+      messages: [
+        { role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
+          { type: 'text', text: USR_TEXT },
+        ] },
+        { role: 'assistant', content: '{"valid":' },
+      ],
+    };
+    const res = await axios.post(`${BASE_URL}/v1/messages`, payload, {
+      headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      timeout: 25000,
+    });
+    const raw = '{"valid":' + (res.data.content?.[0]?.text ?? '');
+    console.log('[Vision] b64 raw:', raw.slice(0, 150));
+    const m = raw.match(/\{[^{}]*"valid"\s*:\s*(true|false)[^{}]*\}/);
+    if (m) return JSON.parse(m[0]);
+    return { valid: false, reason: 'Réponse non parseable — réessaie' };
   } catch (e) {
-    console.error('[Vision] API error:', e.response?.status, e.message);
-    if (e.response?.status === 401) {
-      console.warn('[Vision] 401 — clé invalide. Vérifie ANTHROPIC_API_KEY dans Railway.');
-      return { valid: true, reason: 'Clé API invalide — validé auto (configure ANTHROPIC_API_KEY)' };
-    }
-    if (e.response?.status === 400) {
-      // Modèle pas dispo ou paramètre invalide — fallback haiku ancien
-      console.warn('[Vision] 400 — modèle indisponible, essai fallback...');
-      try {
-        const fallback = await axios.post(`${BASE_URL}/v1/messages`, {
-          model: 'claude-haiku-5-5', max_tokens: 80, system: SYSTEM,
-          messages: [
-            { role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
-              { type: 'text', text: USER_TEXT },
-            ] },
-          ],
-        }, { headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 20000 });
-        const ft = fallback.data.content?.[0]?.text ?? '{}';
-        const fm = ft.match(/\{[^{}]*"valid"\s*:\s*(true|false)[^{}]*\}/);
-        if (fm) return JSON.parse(fm[0]);
-      } catch {}
-      return { valid: false, reason: `API error 400 — ${e.message}` };
-    }
+    console.error('[Vision] b64 failed:', e.response?.status, e.message);
+    if (e.response?.status === 401) return { valid: true, reason: 'Clé API invalide — validé auto' };
     return { valid: false, reason: `Erreur API: ${e.message}` };
   }
 }
 
-// ── MM2 VALUES SYNC ──────────────────────────────────────────
-// Source 1 : bloxultra.com (API live officielle) → Source 2 : hardcoded fallback
+// ── MM2 VALUES SYNC — bloxultra.com ──────────────────────────
 async function fetchMM2Values() {
   let synced = 0;
   const stmt = db.prepare(`INSERT INTO weapon_values (name,value,tier,updated_at) VALUES (?,?,?,strftime('%s','now'))
     ON CONFLICT(name) DO UPDATE SET value=excluded.value,tier=excluded.tier,updated_at=excluded.updated_at`);
 
-  // ── Source 1 : bloxultra.com API ─────────────────────────
+  // ── Source principale : bloxultra.com API
   try {
     const r = await axios.get('https://bloxultra.com/api/values/mm2', {
       timeout: 10000,
       headers: { 'User-Agent': 'WenzyBot/3.0', 'Accept': 'application/json' },
     });
     const data = r.data;
-    // bloxultra renvoie typiquement : { items: [...] } ou un tableau direct
-    // Chaque item : { name, value, type/tier, demand, ... }
-    const list = Array.isArray(data) ? data : (data?.items ?? data?.weapons ?? data?.data ?? []);
-    if (Array.isArray(list) && list.length > 0) {
-      for (const item of list) {
-        const name = item.name ?? item.Name ?? item.weapon_name;
-        const val  = Number(item.value ?? item.Value ?? item.demand ?? item.price ?? 0);
-        // tier mapping : bloxultra utilise "type" ou "tier"
-        const rawTier = (item.type ?? item.tier ?? item.rarity ?? 'godly').toLowerCase();
-        const tier = (['ancient','chroma','godly','legendary','epic','rare','uncommon','common'].includes(rawTier))
-          ? rawTier : 'godly';
-        if (name && val > 0) { stmt.run(name, Math.round(val), tier); synced++; }
+    // Format attendu : array d'objets ou objet clé→valeur
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        const name = item.name ?? item.Name ?? item.weapon;
+        const val  = item.value ?? item.Value ?? item.demand ?? item.price ?? 0;
+        const tier = (item.tier ?? item.type ?? item.rarity ?? 'godly').toLowerCase();
+        if (name && val > 0) { stmt.run(String(name), Math.round(val), tier); synced++; }
       }
-    } else if (typeof data === 'object' && !Array.isArray(data)) {
-      // Format plat : { "Corrupt": { value: 90, tier: "godly" }, ... }
+    } else if (data && typeof data === 'object') {
+      // { "Corrupt": { value: 90, tier: "godly" } } ou { "Corrupt": 90 }
       for (const [name, info] of Object.entries(data)) {
-        if (name === 'items' || name === 'data' || name === 'status') continue;
-        const val = Number(info?.value ?? info?.demand ?? (typeof info === 'number' ? info : 0));
-        if (name && val > 0) {
-          const rawTier = (info?.tier ?? info?.type ?? 'godly').toLowerCase();
-          const tier = (['ancient','chroma','godly','legendary','epic','rare','uncommon','common'].includes(rawTier)) ? rawTier : 'godly';
-          stmt.run(name, Math.round(val), tier); synced++;
-        }
+        if (name === 'success' || name === 'status' || name === 'message') continue;
+        const val  = typeof info === 'number' ? info : (info?.value ?? info?.demand ?? info?.price ?? 0);
+        const tier = (info?.tier ?? info?.type ?? info?.rarity ?? 'godly').toLowerCase();
+        if (name && val > 0) { stmt.run(String(name), Math.round(val), tier); synced++; }
       }
     }
     if (synced > 0) {
-      console.log(`[Values] ✅ bloxultra.com: ${synced} armes synchronisées`);
+      console.log(`[Values] bloxultra.com: ${synced} armes synced`);
       return;
     }
-    console.warn('[Values] bloxultra.com: réponse vide ou format inattendu, fallback hardcoded');
+    console.warn('[Values] bloxultra returned 0 items — format inattendu, fallback hardcoded');
   } catch (e) {
-    console.warn(`[Values] bloxultra.com failed: ${e.message} — fallback hardcoded`);
+    console.warn('[Values] bloxultra.com failed:', e.response?.status ?? e.message, '— fallback hardcoded');
   }
 
-  // ── Source 2 : Hardcoded fallback (valeurs consensus communauté MM2) ──
+  // ── Fallback hardcoded (valeurs consensus communauté MM2)
   const hardcoded = [
-    ['Ancient Seer', 200, 'ancient'],
-    ['Chroma Seer', 165, 'chroma'],['Chroma Harvester', 150, 'chroma'],
-    ['Chroma Lightbringer', 145, 'chroma'],['Chroma Luger', 125, 'chroma'],
-    ['Chroma Boneblade', 115, 'chroma'],['Chroma Godly', 100, 'chroma'],
-    ['Prism', 95, 'godly'],['Corrupt', 90, 'godly'],
-    ['Elderwood Scythe', 85, 'godly'],['Hallowscythe', 82, 'godly'],
-    ['Blue Seer', 72, 'godly'],['Batwing', 62, 'godly'],['Seer', 60, 'godly'],
-    ['Shark', 57, 'godly'],['Harvester', 55, 'godly'],['Icicle', 52, 'godly'],
-    ['Laser', 50, 'godly'],['Luger', 50, 'godly'],['Candy Cane', 48, 'godly'],
-    ['Lightbringer', 48, 'godly'],['Pumpkin', 47, 'godly'],['Eerie', 46, 'godly'],
-    ['Raygun', 45, 'godly'],['Sparkle', 45, 'godly'],['Ghostblade', 44, 'godly'],
-    ['Silverthorn', 42, 'godly'],['Snowcannon', 42, 'godly'],['Linked', 40, 'godly'],
-    ['Eternal', 40, 'godly'],['Soul', 38, 'godly'],['Spirit', 36, 'godly'],
-    ['Boneblade', 35, 'godly'],['Beachy', 32, 'godly'],['Gingerblade', 30, 'godly'],
-    ['Heat', 28, 'godly'],['Handcuff', 25, 'godly'],['Fang', 25, 'godly'],
-    ['Clutter', 22, 'godly'],['Brush', 20, 'godly'],['Wood', 15, 'godly'],
-    ['Chroma Seer I', 170, 'chroma'],['Godly Knife', 10, 'godly'],
+    ['Ancient Seer',200,'ancient'],
+    ['Chroma Seer',165,'chroma'],['Chroma Harvester',150,'chroma'],['Chroma Lightbringer',145,'chroma'],
+    ['Chroma Luger',125,'chroma'],['Chroma Boneblade',115,'chroma'],['Chroma Godly',100,'chroma'],
+    ['Prism',95,'godly'],['Corrupt',90,'godly'],['Elderwood Scythe',85,'godly'],['Hallowscythe',82,'godly'],
+    ['Blue Seer',72,'godly'],['Batwing',62,'godly'],['Seer',60,'godly'],['Shark',57,'godly'],
+    ['Harvester',55,'godly'],['Icicle',52,'godly'],['Luger',50,'godly'],['Lightbringer',48,'godly'],
+    ['Candy Cane',48,'godly'],['Pumpkin',47,'godly'],['Eerie',46,'godly'],['Raygun',45,'godly'],
+    ['Sparkle',45,'godly'],['Ghostblade',44,'godly'],['Snowcannon',42,'godly'],['Silverthorn',42,'godly'],
+    ['Linked',40,'godly'],['Eternal',40,'godly'],['Soul',38,'godly'],['Spirit',36,'godly'],
+    ['Boneblade',35,'godly'],['Beachy',32,'godly'],['Gingerblade',30,'godly'],
+    ['Heat',28,'godly'],['Handcuff',25,'godly'],['Fang',25,'godly'],
+    ['Clutter',22,'godly'],['Brush',20,'godly'],['Wood',15,'godly'],
   ];
   for (const [name, val, tier] of hardcoded) { stmt.run(name, val, tier); synced++; }
   console.log(`[Values] Hardcoded fallback: ${synced} armes`);
@@ -410,16 +379,13 @@ async function updateLeaderboardChannel(guild) {
 }
 
 // ── COIN LEADERBOARD UPDATE ──────────────────────────────────
-// Cherche d'abord un salon "classement-pièces" ou "coins-leaderboard", sinon utilise "leaderboard"
-// NE touche plus au salon boutique pour ne pas écraser l'embed de la boutique
 async function updateShopCoinLeaderboard(guild) {
-  const ch = guild.channels.cache.find(c =>
-    c.name.includes('classement') || c.name.includes('leaderboard') || c.name.includes('coins-lb')
-  );
+  const ch = guild.channels.cache.find(c => c.name.includes('boutique'));
   if (!ch) return;
   const top = db.prepare('SELECT discord_id,coins FROM users ORDER BY coins DESC LIMIT 10').all();
   if (!top.length) return;
   const medals = ['🥇', '🥈', '🥉'];
+  // Supprimer l'ancien embed classement pièces si existe
   const msgs = await ch.messages.fetch({ limit: 20 });
   for (const m of msgs.values()) {
     if (m.author.bot && m.embeds?.[0]?.title?.includes('Classement Pièces')) await m.delete().catch(() => {});
@@ -429,17 +395,7 @@ async function updateShopCoinLeaderboard(guild) {
     .setFooter({ text: 'Mis à jour automatiquement' }).setTimestamp()] });
 }
 
-// ── POST WEAPON VALUES ───────────────────────────────────────
-async function postWeaponValues(ch) {
-  const weapons = db.prepare('SELECT * FROM weapon_values ORDER BY value DESC LIMIT 50').all();
-  if (!weapons.length) return;
-  const tiers = ['ancient','chroma','godly','legendary','epic','rare','uncommon','common'];
-  const grouped = {}; for (const t of tiers) grouped[t] = weapons.filter(w => w.tier === t);
-  const lines = [];
-  for (const t of tiers) { if (!grouped[t].length) continue; lines.push(`**${TIER_LABELS[t] ?? t}**`); for (const w of grouped[t]) lines.push(`• ${w.name} — **${w.value} val**`); lines.push(''); }
-  const msgs = await ch.messages.fetch({ limit: 10 }); for (const m of msgs.values()) if (m.author.bot) await m.delete().catch(() => {});
-  await ch.send({ embeds: [new EmbedBuilder().setColor(C.primary).setTitle('📦 Valeurs Armes MM2').setDescription(lines.join('\n').slice(0, 3900)).setFooter({ text: 'Mise à jour automatique toutes les heures' }).setTimestamp()] });
-}
+
 
 // ── SHARED FUNCTIONS ─────────────────────────────────────────
 async function doVerify(interaction) {
@@ -581,7 +537,7 @@ const commands = [
       log.push('🧹 Nettoyage en cours...');
       const channelNamesToDelete = [
         '🔑┃verification','📌┃règles-et-info','📊┃leaderboard','📋┃logs',
-        '🔗┃link-roblox','🗡️┃post-trades','📬┃poster-un-trade',
+        '🔗┃link-roblox','🗡️┃post-trades','📬┃poster-un-trade','💰┃price-check',
         '🏆┃vouches','🛡️┃middleman-panel','📦┃weapon-values','💬┃général',
         '📺┃vidéos-wenzy','🎙️┃vocal-général','🛒┃boutique',
         '🔒 VÉRIFICATION','📌 WENZY SYSTEM','🗡️ MM2 TRADING','💬 COMMUNAUTÉ','🛒 ECONOMY',
@@ -619,7 +575,7 @@ const commands = [
       const catDefs = [
         { name: '🔒 VÉRIFICATION', chs: [{ name: '🔑┃verification', verif: true }] },
         { name: '📌 WENZY SYSTEM', chs: [{ name: '📌┃règles-et-info' }, { name: '📊┃leaderboard' }, { name: '📋┃logs', staff: true }, { name: '🔗┃link-roblox' }] },
-        { name: '🗡️ MM2 TRADING', chs: [{ name: '🗡️┃post-trades' }, { name: '📬┃poster-un-trade' }, { name: '🏆┃vouches' }, { name: '🛡️┃middleman-panel', staff: true }, { name: '📦┃weapon-values' }] },
+        { name: '🗡️ MM2 TRADING', chs: [{ name: '🗡️┃post-trades' }, { name: '📬┃poster-un-trade' }, { name: '🏆┃vouches' }, { name: '🛡️┃middleman-panel', staff: true }] },
         { name: '💬 COMMUNAUTÉ', chs: [{ name: '💬┃général' }, { name: '📺┃vidéos-wenzy' }, { name: '🎙️┃vocal-général', voice: true }] },
         { name: '🛒 ECONOMY', chs: [{ name: '🛒┃boutique' }] },
       ];
@@ -662,9 +618,31 @@ const commands = [
         log.push('✅ Embed poster-un-trade');
       }
 
-
-      const valCh = cm['📦┃weapon-values'];
-      if (valCh) { await postWeaponValues(valCh); log.push('✅ Valeurs armes'); }
+      // Embed dans link-roblox
+      const linkCh = cm['🔗┃link-roblox'];
+      if (linkCh) {
+        await linkCh.send({ embeds: [new EmbedBuilder().setColor(C.info)
+          .setTitle('🔗 Lier ton compte Roblox')
+          .setDescription([
+            'Pour participer aux trades, tu dois lier ton compte Roblox à ton Discord.',
+            '',
+            '**Comment faire :**',
+            '**1.** Clique sur le bouton **"Lier mon compte"** ci-dessous',
+            '**2.** Entre ton pseudo Roblox exact',
+            '**3.** Le bot génère un code unique',
+            '**4.** Colle ce code dans ta **bio Roblox** → [Modifier ma bio](https://www.roblox.com/my/account#!/info)',
+            '**5.** Reviens ici et clique **"Vérifier maintenant"**',
+            '',
+            '> ✅ Une fois vérifié, tu obtiens le rôle **🆕 Nouveau** et l\'accès complet au serveur.',
+            '> 🔁 Si tu changes de compte, refais simplement la procédure.',
+          ].join('\n'))
+          .setFooter({ text: 'Vérification via API Roblox officielle — sécurisé' })],
+          components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('btn_link_start').setLabel('🔗 Lier mon compte').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('btn_verify_now').setLabel('✅ Vérifier maintenant').setStyle(ButtonStyle.Success),
+          )] });
+        log.push('✅ Embed link-roblox');
+      }
 
       const boutiqueCh = cm['🛒┃boutique'];
       if (boutiqueCh) { await postShopEmbed(boutiqueCh); log.push('✅ Boutique embed'); }
@@ -704,11 +682,24 @@ const commands = [
   // /trade
   { data: new SlashCommandBuilder().setName('trade').setDescription('🗡️ Système de trades MM2')
       .addSubcommand(s => s.setName('post').setDescription('📤 Poster un trade').addStringOption(o => o.setName('offre').setDescription('Armes offertes (virgules)').setRequired(true)).addStringOption(o => o.setName('cherche').setDescription('Ce que tu cherches').setRequired(true)))
-      .addSubcommand(s => s.setName('cancel').setDescription('❌ Annuler ton trade').addIntegerOption(o => o.setName('id').setDescription('ID du trade').setRequired(true))),
+      .addSubcommand(s => s.setName('cancel').setDescription('❌ Annuler ton trade').addIntegerOption(o => o.setName('id').setDescription('ID du trade').setRequired(true)))
+      .addSubcommand(s => s.setName('check').setDescription('⚖️ Price check').addStringOption(o => o.setName('offre').setDescription('Armes offertes').setRequired(true)).addStringOption(o => o.setName('recois').setDescription('Armes reçues').setRequired(true))),
     async execute(interaction) {
       const sub = interaction.options.getSubcommand(), did = interaction.user.id;
       if (sub === 'post') { await interaction.deferReply({ ephemeral: true }); await postTrade(interaction, did, interaction.options.getString('offre'), interaction.options.getString('cherche')); }
       else if (sub === 'cancel') { await interaction.deferReply({ ephemeral: true }); await cancelTrade(interaction, did, interaction.options.getInteger('id')); }
+      else if (sub === 'check') {
+        await interaction.deferReply({ ephemeral: true });
+        const { total: ov, details: od } = calcValue(parseWeapons(interaction.options.getString('offre')));
+        const { total: rv, details: rd } = calcValue(parseWeapons(interaction.options.getString('recois')));
+        const diff = ov - rv, fair = Math.abs(diff) <= 20;
+        await interaction.editReply({ embeds: [new EmbedBuilder().setColor(fair ? C.success : (diff > 0 ? C.danger : C.gold)).setTitle('⚖️ Price Check MM2')
+          .addFields(
+            { name: '📤 Tu offres', value: od.map(w => `${w.name} → **${w.value} val**`).join('\n') + `\n**Total : ${ov} val**`, inline: true },
+            { name: '📥 Tu reçois', value: rd.map(w => `${w.name} → **${w.value} val**`).join('\n') + `\n**Total : ${rv} val**`, inline: true },
+            { name: '⚖️ Résultat', value: (fair ? '⚖️ Fair' : (diff > 0 ? '📉 Unfair — tu perds' : '📈 Avantageux pour toi')) + `\nDiff : ${Math.abs(diff)} val`, inline: false },
+          ).setTimestamp()] });
+      }
     }
   },
 
@@ -747,26 +738,12 @@ const commands = [
     }
   },
 
-  // /updatevalues
-  { data: new SlashCommandBuilder().setName('updatevalues').setDescription('🔄 (Admin) Sync valeurs MM2 live').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  // /updatevalues — force sync bloxultra
+  { data: new SlashCommandBuilder().setName('updatevalues').setDescription('🔄 (Admin) Sync valeurs MM2 depuis bloxultra').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     async execute(interaction) {
       await interaction.deferReply({ ephemeral: true }); await fetchMM2Values();
       const count = db.prepare('SELECT COUNT(*) as c FROM weapon_values').get().c;
       await interaction.editReply(`✅ Sync terminée. **${count}** armes dans la base.`);
-    }
-  },
-
-  // /values
-  { data: new SlashCommandBuilder().setName('values').setDescription('📦 Voir les valeurs MM2').addStringOption(o => o.setName('tier').setDescription('Filtrer').addChoices({ name: '🌈 Chroma', value: 'chroma' }, { name: '⚡ Ancient', value: 'ancient' }, { name: '🔥 Godly', value: 'godly' }, { name: 'Toutes', value: 'all' })).addStringOption(o => o.setName('arme').setDescription('Chercher une arme')),
-    async execute(interaction) {
-      await interaction.deferReply();
-      const tier = interaction.options.getString('tier') ?? 'all', arme = interaction.options.getString('arme');
-      let w;
-      if (arme) w = db.prepare('SELECT * FROM weapon_values WHERE LOWER(name) LIKE LOWER(?) ORDER BY value DESC').all(`%${arme}%`);
-      else if (tier === 'all') w = db.prepare('SELECT * FROM weapon_values ORDER BY value DESC LIMIT 30').all();
-      else w = db.prepare('SELECT * FROM weapon_values WHERE tier=? ORDER BY value DESC').all(tier);
-      if (!w.length) return interaction.editReply('❌ Aucune arme trouvée.');
-      await interaction.editReply({ embeds: [new EmbedBuilder().setColor(tier !== 'all' ? (TIER_COLORS[tier] ?? C.primary) : C.primary).setTitle(`📦 Valeurs MM2${tier !== 'all' ? ` — ${TIER_LABELS[tier] ?? tier}` : ''}`).setDescription(w.map(x => `• **${x.name}** — ${x.value} val _(${TIER_LABELS[x.tier] ?? x.tier})_`).join('\n').slice(0, 2000)).setFooter({ text: `${w.length} arme(s) • Sync auto toutes les heures` }).setTimestamp()] });
     }
   },
 
@@ -854,54 +831,46 @@ const commands = [
 
 ];
 
-// ── SHOP EMBED dans salon boutique ───────────────────────────
+// ── SHOP EMBED dans salon boutique — boutons directs, zéro slash ─
 async function postShopEmbed(ch) {
-  const msgs = await ch.messages.fetch({ limit: 20 });
+  const msgs = await ch.messages.fetch({ limit: 10 });
   for (const m of msgs.values()) if (m.author.bot) await m.delete().catch(() => {});
 
-  // Embed principal
-  const shopEmbed = new EmbedBuilder()
-    .setColor(C.gold)
-    .setTitle('🛒 Boutique Wenzy')
-    .setDescription([
-      '> Utilise tes 🪙 pour acheter des rôles et avantages exclusifs !',
-      '',
-      '━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-      '🎨  **Rôle Couleur Custom**',
-      '> Choisis un nom + couleur hex pour ton rôle unique',
-      '> **Prix : 500 🪙**',
-      '',
-      '👑  **Rôle VIP**',
-      '> Accès VIP permanent avec avantages exclusifs',
-      '> **Prix : 1 000 🪙**',
-      '',
-      '💎  **Badge Elite Trader**',
-      '> Badge de prestige, visible sur ton profil et dans les trades',
-      '> **Prix : 10 000 🪙**',
-      '━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-      '',
-      '**🪙 Comment gagner des pièces ?**',
-      '```',
-      '+5  🪙  par message (cooldown 1 min)',
-      '+1  🪙  par minute en vocal',
-      '+50 🪙  par trade complété',
-      '```',
-      '',
-      '_Clique directement sur un article pour l\'acheter._',
-    ].join('\n'))
-    .setFooter({ text: 'WenzyBot v3 — Boutique' })
-    .setTimestamp();
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('shop_role_custom').setLabel('🎨 Rôle Custom — 500 🪙').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('shop_vip').setLabel('👑 VIP — 1 000 🪙').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('shop_elite_badge').setLabel('💎 Elite — 10 000 🪙').setStyle(ButtonStyle.Secondary),
-  );
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('shop_check_coins').setLabel('🪙 Mes Pièces').setStyle(ButtonStyle.Success),
-  );
-
-  await ch.send({ embeds: [shopEmbed], components: [row, row2] });
+  await ch.send({
+    embeds: [new EmbedBuilder().setColor(C.gold)
+      .setTitle('🛒 Boutique Wenzy')
+      .setDescription([
+        '**Dépense tes 🪙 pour débloquer des avantages exclusifs !**',
+        '',
+        '━━━━━━━━━━━━━━━━━━━━━━━',
+        '🎨 **Rôle couleur custom** — **500 🪙**',
+        '> Crée un rôle avec le nom et la couleur de ton choix',
+        '',
+        '👑 **Rôle VIP** — **1 000 🪙**',
+        '> Accès aux avantages VIP + rôle hoisted visible',
+        '',
+        '🏆 **Badge Elite Trader** — **10 000 🪙**',
+        '> Statut prestige + rôle 💎 Elite Trader',
+        '━━━━━━━━━━━━━━━━━━━━━━━',
+        '',
+        '**Comment gagner des 🪙 ?**',
+        '• +5 🪙 par message _(cooldown 1 min)_',
+        '• +1 🪙 par minute en vocal',
+        '• +50 🪙 par trade complété',
+      ].join('\n'))
+      .setFooter({ text: 'Clique sur un bouton pour acheter — classement mis à jour auto' })
+      .setTimestamp()],
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('shop_role_custom').setLabel('🎨 Rôle Custom — 500 🪙').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('shop_vip').setLabel('👑 VIP — 1 000 🪙').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('shop_elite_badge').setLabel('🏆 Elite — 10 000 🪙').setStyle(ButtonStyle.Secondary),
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('shop_mes_pieces').setLabel('🪙 Voir mes pièces').setStyle(ButtonStyle.Success),
+      ),
+    ],
+  });
 }
 
 // ── BUTTON HANDLER ───────────────────────────────────────────
@@ -925,25 +894,20 @@ async function handleButton(interaction) {
     return interaction.showModal(modal);
   }
 
-  // Shop buttons
-  if (customId === 'shop_check_coins') {
+  if (customId === 'shop_mes_pieces') {
     await interaction.deferReply({ ephemeral: true });
     const u = db.prepare('SELECT * FROM users WHERE discord_id=?').get(user.id);
     const coins = u?.coins ?? 0;
+    const purchases = db.prepare('SELECT * FROM shop_purchases WHERE discord_id=? ORDER BY created_at DESC LIMIT 5').all(user.id);
     return interaction.editReply({ embeds: [new EmbedBuilder().setColor(C.gold)
-      .setTitle('🪙 Ton Solde')
+      .setTitle('🪙 Ton solde')
       .addFields(
-        { name: '🪙 Pièces', value: `**${coins}**`, inline: true },
-        { name: '✅ Trades', value: `**${u?.trade_count ?? 0}**`, inline: true },
-        { name: '🏆 Rang', value: getRankLabel(u?.rank ?? 'new'), inline: true },
-        { name: '📊 Accès', value: [
-          coins >= 500  ? '✅ Rôle Custom (500 🪙)' : `❌ Rôle Custom — manque **${500 - coins} 🪙**`,
-          coins >= 1000 ? '✅ VIP (1 000 🪙)'       : `❌ VIP — manque **${1000 - coins} 🪙**`,
-          coins >= 10000? '✅ Elite (10 000 🪙)'     : `❌ Elite — manque **${10000 - coins} 🪙**`,
-        ].join('\n'), inline: false },
+        { name: '💰 Pièces disponibles', value: `**${coins} 🪙**`, inline: true },
+        { name: '📦 Derniers achats', value: purchases.length ? purchases.map(p => `• ${p.item_type} — ${p.coins_spent} 🪙`).join('\n') : '_Aucun achat_', inline: false },
       ).setTimestamp()] });
   }
 
+  // Shop buttons
   if (customId === 'shop_role_custom') {
     const user2 = db.prepare('SELECT * FROM users WHERE discord_id=?').get(user.id);
     if (!user2 || user2.coins < 500) { await interaction.deferReply({ ephemeral: true }); return interaction.editReply(`❌ Tu n'as pas assez de pièces. Il te faut **500 🪙** (tu en as **${user2?.coins ?? 0}**).`); }
@@ -1019,28 +983,7 @@ async function handleButton(interaction) {
       const server = getFreeServer();
       if (server) { db.prepare('UPDATE private_servers SET in_use=1,trade_id=? WHERE id=?').run(tid, server.id); db.prepare('UPDATE trades SET server_link=? WHERE id=?').run(server.link, tid); }
       await thread.send({ embeds: [threadSummaryEmbed(updated, poster, accepter)], components: [threadButtons(tid)] });
-      if (server) {
-        const robloxEmbed = new EmbedBuilder()
-          .setColor(0x00B2FF)
-          .setTitle('🎮 Serveur Privé MM2 — Rejoins maintenant !')
-          .setDescription([
-            '> Clique sur le bouton ci-dessous pour rejoindre le serveur privé.',
-            '',
-            '**Instructions :**',
-            '1. Ouvre Roblox',
-            '2. Clique **Rejoindre** via le lien',
-            '3. Lance le trade avec l\'autre joueur',
-            '4. Screenshot **"YOU HAVE ACCEPTED"** et envoie-le ici',
-          ].join('\n'))
-          .setFooter({ text: 'Le lien est à usage unique pour ce trade.' });
-        const robloxRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setLabel('🕹️ Rejoindre le serveur MM2')
-            .setStyle(ButtonStyle.Link)
-            .setURL(server.link),
-        );
-        await thread.send({ embeds: [robloxEmbed], components: [robloxRow] });
-      }
+      if (server) await thread.send(`🎮 **Serveur Privé MM2 — Rejoins maintenant :**\n${server.link}`);
       await thread.send('📸 **Exemple de screenshot attendu — envoie un screenshot identique après le trade :**');
       if (fs.existsSync(REF_SCREEN_PATH)) await thread.send({ files: [REF_SCREEN_PATH] });
       const mmPanel = guild.channels.cache.find(c => c.name.includes('middleman-panel'));
