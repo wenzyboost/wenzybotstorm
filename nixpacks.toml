@@ -1,11 +1,8 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "python3", "gcc", "gnumake", "pkg-config"]
+nixPkgs = ["nodejs_20"]
 
 [phases.install]
-cmds = ["npm install --build-from-source"]
-
-[phases.build]
-cmds = ["npm rebuild better-sqlite3 --build-from-source"]
+cmds = ["npm install"]
 
 [start]
 cmd = "node bot.js"

@@ -5,8 +5,7 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "nodemon bot.js",
-    "postinstall": "npm rebuild better-sqlite3 --build-from-source"
+    "dev": "nodemon bot.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
