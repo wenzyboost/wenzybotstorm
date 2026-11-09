@@ -1,16 +1,15 @@
 // ═══════════════════════════════════════════════════════════════
-//  WENZY BOT v4 — bot.js  (single file, Railway ready)
+//  WENZY BOT v5 — bot.js  (single file, Railway ready)
 //  node bot.js
-//  CHANGELOG v4:
-//   - Screenshot vérif: supprimé AI → vérification MANUELLE staff
-//   - Post trade: OFFRE + TOTAL VALUE / RECHERCHE + TOTAL VALUE
-//   - weapon_values masqués partout SAUF dans post-trade embed
-//   - Permissions rôles: Owner=Admin, Admin=Admin, Modo=Modo, MM=Manage Messages
-//   - /addxp — ajoute XP à un membre
-//   - /addcoins — ajoute pièces à un membre
-//   - /giveaway — système avancé (start/end/reroll)
-//   - /shopadd + /shopremove — gérer items boutique dynamiquement
-//   - Staff pingé sur chaque trade à vérifier
+//  CHANGELOG v5:
+//   - Modal post-trade: champs TOTAL VALUE manuels (offre + recherche)
+//   - Salon dédié classement-pièces, mis à jour toutes les 10 min
+//   - Salon bienvenue avec embed + avatar à chaque join
+//   - Vocaux privés: création via bouton, commandes !open !close !add !kick !rename
+//   - AFK + Sleep vocaux: 0 coins, 0 XP
+//   - Paliers XP message (15 paliers) + paliers XP vocal (10 paliers) avec rôles auto
+//   - Persistence rôles au reboot (restore rank/xp roles sur ClientReady)
+//   - /updatevalue supprimé du setup (auto-sync gardé)
 // ═══════════════════════════════════════════════════════════════
 'use strict';
 require('dotenv').config();
@@ -109,11 +108,17 @@ db.exec(`
     winners TEXT DEFAULT '[]',
     created_at INTEGER DEFAULT (strftime('%s','now'))
   );
+  CREATE TABLE IF NOT EXISTS private_vocals (
+    channel_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s','now'))
+  );
   INSERT OR IGNORE INTO youtube_last (id,checked_at) VALUES (1,0);
 `);
 
-// Migrate existing DB: add xp column if not exists
+// Migrations safe
 try { db.exec('ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0'); } catch {}
+try { db.exec('ALTER TABLE users ADD COLUMN vocal_minutes INTEGER DEFAULT 0'); } catch {}
 
 const defaults = [
   ['Chroma Seer',165,'chroma'],['Corrupt',90,'godly'],['Hallowscythe',80,'godly'],
@@ -127,7 +132,6 @@ const defaults = [
 const _iw = db.prepare('INSERT OR IGNORE INTO weapon_values (name,value,tier) VALUES (?,?,?)');
 for (const [n,v,t] of defaults) _iw.run(n,v,t);
 
-// Default shop items (insert once)
 const defaultShopItems = [
   ['Rôle couleur custom','Crée un rôle avec le nom et couleur de ton choix',500,'custom_role','🎨'],
   ['Rôle VIP','Accès VIP + rôle hoisted visible',1000,'vip_role','👑'],
@@ -136,9 +140,82 @@ const defaultShopItems = [
 const _si = db.prepare('INSERT OR IGNORE INTO shop_items (name,description,price,item_type,emoji) VALUES (?,?,?,?,?)');
 for (const [n,d,p,t,e] of defaultShopItems) _si.run(n,d,p,t,e);
 
-// ── RANKS ────────────────────────────────────────────────────
+// ── RANKS TRADE ──────────────────────────────────────────────
 function getRank(n){ if(n>=50)return'elite'; if(n>=20)return'trusted'; if(n>=5)return'confirmed'; return'new'; }
 function getRankLabel(r){ return({new:'🆕 Nouveau',confirmed:'✅ Confirmé',trusted:'⭐ Fiable',elite:'👑 Elite'})[r]??'🆕 Nouveau'; }
+
+// ── XP PALIERS MESSAGE ───────────────────────────────────────
+const XP_MSG_TIERS = [
+  { xp:    0, name:'💬 Lvl 0', color:0x95A5A6 },
+  { xp:   50, name:'💬 Lvl 1', color:0x7F8C8D },
+  { xp:  150, name:'💬 Lvl 2', color:0x2ECC71 },
+  { xp:  300, name:'💬 Lvl 3', color:0x27AE60 },
+  { xp:  500, name:'💬 Lvl 4', color:0x3498DB },
+  { xp:  800, name:'💬 Lvl 5', color:0x2980B9 },
+  { xp: 1200, name:'💬 Lvl 6', color:0x9B59B6 },
+  { xp: 1700, name:'💬 Lvl 7', color:0x8E44AD },
+  { xp: 2500, name:'💬 Lvl 8', color:0xF39C12 },
+  { xp: 3500, name:'💬 Lvl 9', color:0xE67E22 },
+  { xp: 5000, name:'💬 Lvl 10', color:0xE74C3C },
+  { xp: 7000, name:'💬 Lvl 11', color:0xC0392B },
+  { xp:10000, name:'💬 Lvl 12', color:0xF1C40F },
+  { xp:14000, name:'💬 Lvl 13', color:0xF39C12 },
+  { xp:20000, name:'💬 Lvl 14', color:0x1ABC9C },
+  { xp:30000, name:'💬 Lvl 15', color:0x16A085 },
+];
+
+// ── XP PALIERS VOCAL ─────────────────────────────────────────
+const XP_VOCAL_TIERS = [
+  { min:    0, name:'🎙️ Vocal Lvl 0', color:0x95A5A6 },
+  { min:   30, name:'🎙️ Vocal Lvl 1', color:0x7F8C8D },
+  { min:  100, name:'🎙️ Vocal Lvl 2', color:0x2ECC71 },
+  { min:  300, name:'🎙️ Vocal Lvl 3', color:0x27AE60 },
+  { min:  600, name:'🎙️ Vocal Lvl 4', color:0x3498DB },
+  { min: 1200, name:'🎙️ Vocal Lvl 5', color:0x9B59B6 },
+  { min: 2000, name:'🎙️ Vocal Lvl 6', color:0xF39C12 },
+  { min: 3500, name:'🎙️ Vocal Lvl 7', color:0xE74C3C },
+  { min: 6000, name:'🎙️ Vocal Lvl 8', color:0xF1C40F },
+  { min:10000, name:'🎙️ Vocal Lvl 9', color:0x1ABC9C },
+  { min:18000, name:'🎙️ Vocal Lvl 10', color:0xE74C3C },
+];
+
+function getXpMsgTier(xp) {
+  let tier = XP_MSG_TIERS[0];
+  for (const t of XP_MSG_TIERS) { if (xp >= t.xp) tier = t; }
+  return tier;
+}
+function getVocalTier(min) {
+  let tier = XP_VOCAL_TIERS[0];
+  for (const t of XP_VOCAL_TIERS) { if (min >= t.min) tier = t; }
+  return tier;
+}
+
+async function applyXpRoles(guild, member, xp, vocalMin) {
+  try {
+    const msgTier  = getXpMsgTier(xp);
+    const vocTier  = getVocalTier(vocalMin);
+    const allMsgNames  = XP_MSG_TIERS.map(t=>t.name);
+    const allVocNames  = XP_VOCAL_TIERS.map(t=>t.name);
+    // Remove old xp msg roles
+    for (const rn of allMsgNames) {
+      const r = guild.roles.cache.find(x=>x.name===rn);
+      if (r && r.name !== msgTier.name && member.roles.cache.has(r.id)) await member.roles.remove(r).catch(()=>{});
+    }
+    // Apply current xp msg role
+    let targetMsg = guild.roles.cache.find(x=>x.name===msgTier.name);
+    if (!targetMsg && msgTier.xp > 0) targetMsg = await guild.roles.create({name:msgTier.name,color:msgTier.color,hoist:false}).catch(()=>null);
+    if (targetMsg && !member.roles.cache.has(targetMsg.id)) await member.roles.add(targetMsg).catch(()=>{});
+    // Remove old vocal roles
+    for (const rn of allVocNames) {
+      const r = guild.roles.cache.find(x=>x.name===rn);
+      if (r && r.name !== vocTier.name && member.roles.cache.has(r.id)) await member.roles.remove(r).catch(()=>{});
+    }
+    // Apply current vocal role
+    let targetVoc = guild.roles.cache.find(x=>x.name===vocTier.name);
+    if (!targetVoc && vocTier.min > 0) targetVoc = await guild.roles.create({name:vocTier.name,color:vocTier.color,hoist:false}).catch(()=>null);
+    if (targetVoc && !member.roles.cache.has(targetVoc.id)) await member.roles.add(targetVoc).catch(()=>{});
+  } catch(e) { console.error('[XPRoles]', e.message); }
+}
 
 // ── COLORS ───────────────────────────────────────────────────
 const C={primary:0x7B2FBE,success:0x2ECC71,warning:0xF39C12,danger:0xE74C3C,info:0x3498DB,gold:0xF1C40F};
@@ -151,17 +228,21 @@ function hasStaffPerm(member) {
     staffRoleNames.some(n => member.roles.cache.find(r => r.name === n));
 }
 
-// ── TRADE EMBED (avec TOTAL VALUE dans OFFRE + RECHERCHE) ────
+// ── AFK / SLEEP DETECTION ────────────────────────────────────
+function isIdleChannel(ch) {
+  if (!ch) return false;
+  const n = ch.name.toLowerCase();
+  return n.includes('afk') || n.includes('sleep');
+}
+
+// ── TRADE EMBED ──────────────────────────────────────────────
 function tradeEmbed(trade, poster) {
   const off = JSON.parse(trade.offer_weapons), want = JSON.parse(trade.want_weapons);
   const diff = trade.offer_value - trade.want_value, fair = Math.abs(diff) <= 20;
-  // Offre: items avec valeur + TOTAL VALUE en bas
   const offreLines = off.map(w => `• ${w.name} _(${w.value} val)_`);
   offreLines.push(`\n**TOTAL VALUE : ${trade.offer_value} val**`);
-  // Recherche: items SANS valeur individuelle + TOTAL VALUE si connue
   const wantLines = want.map(w => `• ${w.name}`);
   if (trade.want_value > 0) wantLines.push(`\n**TOTAL VALUE : ${trade.want_value} val**`);
-
   return new EmbedBuilder().setColor(C.primary)
     .setTitle(`🗡️ TRADE #${String(trade.id).padStart(4,'0')}`)
     .setThumbnail(poster?.roblox_avatar ?? null)
@@ -247,7 +328,6 @@ function threadButtons(id) {
   );
 }
 
-// ── Staff verification buttons (new v4) ──────────────────────
 function staffVerifyButtons(tradeId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`staff_validate_${tradeId}`).setLabel('✅ Valider le trade').setStyle(ButtonStyle.Success),
@@ -256,17 +336,18 @@ function staffVerifyButtons(tradeId) {
 }
 
 function profileEmbed(user, inv) {
-  // Pas de valeur dans inventory affiché ici
+  const msgTier  = getXpMsgTier(user.xp??0);
+  const vocTier  = getVocalTier(user.vocal_minutes??0);
   return new EmbedBuilder().setColor(C.primary)
     .setTitle(`👤 ${user.roblox_username??'Non lié'}`).setThumbnail(user.roblox_avatar??null)
     .addFields(
       {name:'🎮 Roblox',value:user.verified?`${user.roblox_username} ✅`:'❌ Non lié',inline:true},
-      {name:'🏆 Rang',value:getRankLabel(user.rank),inline:true},
+      {name:'🏆 Rang Trade',value:getRankLabel(user.rank),inline:true},
       {name:'⭐ Réputation',value:`✅ ${user.trade_count} trades\n💬 ${user.vouch_count} vouches\n🚨 ${user.report_count} reports`,inline:true},
       {name:'📦 Inventory',value:(inv.length?inv.map(w=>`• ${w.weapon_name}`).join('\n').slice(0,1000):'— Vide'),inline:false},
       {name:'🪙 Pièces',value:`${user.coins}`,inline:true},
-      {name:'✨ XP',value:`${user.xp??0}`,inline:true},
-      {name:'⏱️ Vocal',value:`${user.vocal_minutes} min`,inline:true},
+      {name:'✨ XP',value:`${user.xp??0} — ${msgTier.name}`,inline:true},
+      {name:'🎙️ Vocal',value:`${user.vocal_minutes??0} min — ${vocTier.name}`,inline:true},
     ).setTimestamp();
 }
 
@@ -310,7 +391,7 @@ async function fetchMM2Values() {
   const stmt = db.prepare(`INSERT INTO weapon_values (name,value,tier,updated_at) VALUES (?,?,?,strftime('%s','now'))
     ON CONFLICT(name) DO UPDATE SET value=excluded.value,tier=excluded.tier,updated_at=excluded.updated_at`);
   try {
-    const r = await axios.get('https://bloxultra.com/api/values/mm2', { timeout: 10000, headers: { 'User-Agent': 'WenzyBot/4.0', 'Accept': 'application/json' } });
+    const r = await axios.get('https://bloxultra.com/api/values/mm2', { timeout: 10000, headers: { 'User-Agent': 'WenzyBot/5.0', 'Accept': 'application/json' } });
     const data = r.data;
     if (Array.isArray(data)) {
       for (const item of data) { const name=item.name??item.Name??item.weapon; const val=item.value??item.Value??item.demand??item.price??0; const tier=(item.tier??item.type??item.rarity??'godly').toLowerCase(); if(name&&val>0){stmt.run(String(name),Math.round(val),tier);synced++;} }
@@ -324,9 +405,9 @@ async function fetchMM2Values() {
   console.log(`[Values] Hardcoded fallback: ${synced} armes`);
 }
 
-// ── LEADERBOARD ──────────────────────────────────────────────
+// ── LEADERBOARD TRADES ───────────────────────────────────────
 async function updateLeaderboardChannel(guild) {
-  const ch = guild.channels.cache.find(c => c.name.includes('leaderboard'));
+  const ch = guild.channels.cache.find(c => c.name.includes('leaderboard') && !c.name.includes('pièces') && !c.name.includes('pieces'));
   if (!ch) return;
   const top = db.prepare('SELECT discord_id,roblox_username,trade_count,vouch_count,coins,xp,rank FROM users ORDER BY trade_count DESC LIMIT 10').all();
   if (!top.length) return;
@@ -335,20 +416,21 @@ async function updateLeaderboardChannel(guild) {
   for (const m of msgs.values()) if (m.author.bot) await m.delete().catch(() => {});
   await ch.send({ embeds: [new EmbedBuilder().setColor(C.gold).setTitle('🏆 Top Traders MM2 — Classement Live')
     .setDescription(top.map((u,i)=>`${medals[i]??`**${i+1}.**`} <@${u.discord_id}> — ✅ **${u.trade_count}** trades | 💬 **${u.vouch_count}** vouches | 🪙 ${u.coins} pièces | ✨ ${u.xp??0} XP | ${getRankLabel(u.rank)}`).join('\n'))
-    .setFooter({text:'Mis à jour automatiquement toutes les 24h'}).setTimestamp()] });
+    .setFooter({text:'Mis à jour automatiquement'}).setTimestamp()] });
 }
 
-async function updateShopCoinLeaderboard(guild) {
-  const ch = guild.channels.cache.find(c => c.name.includes('boutique'));
+// ── LEADERBOARD PIÈCES (salon dédié, 10 min) ─────────────────
+async function updateCoinsLeaderboardChannel(guild) {
+  const ch = guild.channels.cache.find(c => c.name.includes('classement-pièces') || c.name.includes('classement-pieces'));
   if (!ch) return;
-  const top = db.prepare('SELECT discord_id,coins FROM users ORDER BY coins DESC LIMIT 10').all();
+  const top = db.prepare('SELECT discord_id,coins FROM users ORDER BY coins DESC LIMIT 15').all();
   if (!top.length) return;
   const medals = ['🥇','🥈','🥉'];
-  const msgs = await ch.messages.fetch({ limit: 20 });
-  for (const m of msgs.values()) { if(m.author.bot&&m.embeds?.[0]?.title?.includes('Classement Pièces')) await m.delete().catch(()=>{}); }
+  const msgs = await ch.messages.fetch({ limit: 5 });
+  for (const m of msgs.values()) if (m.author.bot) await m.delete().catch(() => {});
   await ch.send({ embeds: [new EmbedBuilder().setColor(C.gold).setTitle('🪙 Classement Pièces')
     .setDescription(top.map((u,i)=>`${medals[i]??`**${i+1}.**`} <@${u.discord_id}> — **${u.coins} 🪙**`).join('\n'))
-    .setFooter({text:'Mis à jour automatiquement'}).setTimestamp()] });
+    .setFooter({text:'Mis à jour automatiquement | toutes les 10 min'}).setTimestamp()] });
 }
 
 // ── SHARED FUNCTIONS ─────────────────────────────────────────
@@ -373,22 +455,23 @@ async function doVerify(interaction) {
     .setDescription([`Discord lié à **${user.roblox_username}** !`,'','Tu as maintenant accès à tous les salons.','Poste ton premier trade via **poster-un-trade** !'].join('\n'))] });
 }
 
-async function postTrade(interaction, did, offreStr, chercheStr) {
+async function postTrade(interaction, did, offreStr, chercheStr, manualOfferVal, manualWantVal) {
   const user = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
   if (!user?.verified) return interaction.editReply('❌ Lie ton compte Roblox d\'abord via le salon **vérification**.');
 
-  const { total: ov, details: od } = calcValue(parseWeapons(offreStr));
-  const { total: wv, details: wd } = calcValue(parseWeapons(chercheStr));
+  const { total: autoOv, details: od } = calcValue(parseWeapons(offreStr));
+  const { total: autoWv, details: wd } = calcValue(parseWeapons(chercheStr));
 
-  // ── Feedback armes non reconnues (value = 0) ──────────────────
+  // Si total value manuel fourni → override
+  const ov = (manualOfferVal > 0) ? manualOfferVal : autoOv;
+  const wv = (manualWantVal > 0) ? manualWantVal : autoWv;
+
   const unknownOffer  = od.filter(w => w.value === 0).map(w => w.name);
   const unknownWant   = wd.filter(w => w.value === 0).map(w => w.name);
   const unknownLines  = [];
-  if (unknownOffer.length) unknownLines.push(`📤 Offre inconnue (0 val) : **${unknownOffer.join(', ')}**`);
-  if (unknownWant.length)  unknownLines.push(`📥 Recherche inconnue (0 val) : **${unknownWant.join(', ')}**`);
-  const unknownWarn = unknownLines.length
-    ? `\n⚠️ Armes non trouvées dans la base de values :\n${unknownLines.join('\n')}\n_Un admin peut les ajouter via \`/updatevalue\`._`
-    : '';
+  if (unknownOffer.length) unknownLines.push(`📤 Offre inconnue : **${unknownOffer.join(', ')}**`);
+  if (unknownWant.length)  unknownLines.push(`📥 Recherche inconnue : **${unknownWant.join(', ')}**`);
+  const unknownWarn = unknownLines.length ? `\n⚠️ Armes non trouvées dans la base :\n${unknownLines.join('\n')}` : '';
 
   if (user.rank === 'new' && ov > 100) return interaction.editReply('⚠️ Nouveaux membres limités à **100 val** max. Fais quelques trades pour débloquer.');
 
@@ -430,7 +513,6 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
       uid===trade.poster_id?trade.accepter_id:trade.poster_id, uid, tradeId
     );
     db.prepare('UPDATE users SET vouch_count=vouch_count+1 WHERE discord_id=?').run(uid);
-    // Upgrade rank role
     try {
       const member = await guild.members.fetch(uid).catch(() => null);
       if (member) {
@@ -441,6 +523,7 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
         for (const rn of allRankRoles) { const r=guild.roles.cache.find(x=>x.name===rn); if(r&&rn!==targetRoleName)await member.roles.remove(r).catch(()=>{}); }
         const targetRole = guild.roles.cache.find(x => x.name === targetRoleName);
         if (targetRole) await member.roles.add(targetRole).catch(() => {});
+        await applyXpRoles(guild, member, freshUser.xp??0, freshUser.vocal_minutes??0);
       }
     } catch {}
   }
@@ -453,13 +536,10 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
     const accepter = db.prepare('SELECT * FROM users WHERE discord_id=?').get(trade.accepter_id);
     const off  = JSON.parse(trade.offer_weapons);
     const want = JSON.parse(trade.want_weapons);
-
-    // ── Lignes offre avec values réelles ─────────────────────────
     const offerLines = off.map(w => `• ${w.name}${w.value > 0 ? ` _(${w.value} val)_` : ''}`);
     offerLines.push(`**TOTAL : ${trade.offer_value} val**`);
     const wantLines  = want.map(w => `• ${w.name}${w.value > 0 ? ` _(${w.value} val)_` : ''}`);
     if (trade.want_value > 0) wantLines.push(`**TOTAL : ${trade.want_value} val**`);
-
     const embed = new EmbedBuilder().setColor(C.success)
       .setTitle(`✅ VOUCH — TRADE #${String(tradeId).padStart(4,'0')} COMPLÉTÉ`)
       .setDescription(`<@${trade.poster_id}> × <@${trade.accepter_id}>`)
@@ -467,12 +547,8 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
         {name:`📤 ${poster?.roblox_username??'Trader'} (${getRankLabel(poster?.rank??'new')})`,  value: offerLines.join('\n'), inline: true},
         {name:`📥 ${accepter?.roblox_username??'Accepter'} (${getRankLabel(accepter?.rank??'new')})`, value: wantLines.join('\n'),  inline: true},
         {name:'💰 Récompenses', value:`+50 🪙 chacun | +1 vouch mutuel`, inline: false},
-      )
-      .setTimestamp();
-
-    // Screenshot intégré dans l'embed (pas en message brut)
+      ).setTimestamp();
     if (screenshotUrl) embed.setImage(screenshotUrl);
-
     await vCh.send({ embeds: [embed] });
   }
   if (trade.thread_id) {
@@ -485,7 +561,7 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
     } catch {}
   }
   await updateLeaderboardChannel(guild);
-  await updateShopCoinLeaderboard(guild);
+  await updateCoinsLeaderboardChannel(guild);
   return true;
 }
 
@@ -520,7 +596,7 @@ async function endGiveaway(client, giveawayId) {
   } catch (e) { console.error('[Giveaway end]', e.message); }
 }
 
-// ── SHOP EMBED DYNAMIQUE ─────────────────────────────────────
+// ── SHOP EMBED ───────────────────────────────────────────────
 async function postShopEmbed(ch) {
   const msgs = await ch.messages.fetch({ limit: 10 });
   for (const m of msgs.values()) if (m.author.bot) await m.delete().catch(() => {});
@@ -536,10 +612,10 @@ async function postShopEmbed(ch) {
         '━━━━━━━━━━━━━━━━━━━━━━━','',
         '**Comment gagner des 🪙 ?**',
         '• +5 🪙 par message _(cooldown 1 min)_',
-        '• +1 🪙 par minute en vocal',
+        '• +1 🪙 par minute en vocal _(hors AFK/Sleep)_',
         '• +50 🪙 par trade complété',
       ].join('\n'))
-      .setFooter({text:'Clique sur un bouton pour acheter — classement mis à jour auto'})
+      .setFooter({text:'Clique sur un bouton pour acheter'})
       .setTimestamp()],
     components: [
       new ActionRowBuilder().addComponents(
@@ -554,6 +630,47 @@ async function postShopEmbed(ch) {
   });
 }
 
+// ── RESTORE ROLES ON BOOT ────────────────────────────────────
+async function restoreAllRoles(guild) {
+  console.log('[Boot] Restauration des rôles...');
+  const allUsers = db.prepare('SELECT * FROM users WHERE verified=1').all();
+  const rankRoleMap={new:'🆕 Nouveau',confirmed:'✅ Confirmé',trusted:'⭐ Fiable',elite:'👑 Elite'};
+  let count = 0;
+  for (const u of allUsers) {
+    try {
+      const member = await guild.members.fetch(u.discord_id).catch(() => null);
+      if (!member) continue;
+      // Rank role
+      const targetRank = rankRoleMap[u.rank??'new'];
+      const rrole = guild.roles.cache.find(r=>r.name===targetRank);
+      if (rrole && !member.roles.cache.has(rrole.id)) await member.roles.add(rrole).catch(()=>{});
+      // XP roles
+      await applyXpRoles(guild, member, u.xp??0, u.vocal_minutes??0);
+      count++;
+    } catch {}
+  }
+  console.log(`[Boot] ${count} membres restaurés`);
+}
+
+// ── VOCAL PRIVÉ HELPERS ──────────────────────────────────────
+async function createPrivateVocal(guild, member) {
+  try {
+    const catPv = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.includes('VOCAUX PRIVÉS'));
+    const ch = await guild.channels.create({
+      name: `🔒 ${member.displayName}`,
+      type: ChannelType.GuildVoice,
+      parent: catPv?.id ?? null,
+      permissionOverwrites: [
+        { id: guild.id, deny: [PermissionFlagsBits.Connect] },
+        { id: member.id, allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.MoveMembers] },
+      ],
+    });
+    db.prepare('INSERT OR REPLACE INTO private_vocals (channel_id,owner_id) VALUES (?,?)').run(ch.id, member.id);
+    await member.voice.setChannel(ch).catch(()=>{});
+    return ch;
+  } catch(e) { console.error('[PV]', e.message); return null; }
+}
+
 // ── COMMANDS ─────────────────────────────────────────────────
 const commands = [
 
@@ -563,31 +680,49 @@ const commands = [
       await interaction.deferReply({ ephemeral: true });
       const guild = interaction.guild, log = [];
       log.push('🧹 Nettoyage en cours...');
-      const channelNamesToDelete = ['🔑┃verification','📌┃règles-et-info','📊┃leaderboard','📋┃logs','🔗┃link-roblox','🗡️┃post-trades','📬┃poster-un-trade','💰┃price-check','🏆┃vouches','🛡️┃middleman-panel','📦┃weapon-values','💬┃général','📺┃vidéos-wenzy','🎙️┃vocal-général','🛒┃boutique','🔒 VÉRIFICATION','📌 WENZY SYSTEM','🗡️ MM2 TRADING','💬 COMMUNAUTÉ','🛒 ECONOMY'];
-      for (const ch of guild.channels.cache.values()) { if(channelNamesToDelete.includes(ch.name)){await ch.delete('wenzy-setup reset').catch(()=>{});log.push(`🗑️ Supprimé: ${ch.name}`);} }
-      
-      // ── RÔLES avec permissions ──
+      const channelNamesToDelete = [
+        '🔑┃verification','📌┃règles-et-info','📊┃leaderboard','📋┃logs','🔗┃link-roblox',
+        '🗡️┃post-trades','📬┃poster-un-trade','💰┃price-check','🏆┃vouches','🛡️┃middleman-panel',
+        '📦┃weapon-values','💬┃général','📺┃vidéos-wenzy','🎙️┃vocal-général','🛒┃boutique',
+        '🔒 VÉRIFICATION','📌 WENZY SYSTEM','🗡️ MM2 TRADING','💬 COMMUNAUTÉ','🛒 ECONOMY',
+        '👋┃bienvenue','🪙┃classement-pièces','🎙️VOCAUX PRIVÉS','🏗️ VOCAUX',
+        '🏗️ CRÉER UN VOCAL','🎙️┃créer-un-vocal','🔇┃afk','😴┃sleep',
+        '🎙️┃vocal-1','🎙️┃vocal-2','🎙️┃vocal-3',
+        '🗂️ VOCAUX PRIVÉS','🗂️ VOCAUX',
+        'VOCAUX PRIVÉS',
+      ];
+      for (const ch of guild.channels.cache.values()) {
+        if(channelNamesToDelete.includes(ch.name)||ch.name.includes('classement-pièces')||ch.name.includes('VOCAUX PRIVÉS')){
+          await ch.delete('wenzy-setup reset').catch(()=>{});log.push(`🗑️ Supprimé: ${ch.name}`);
+        }
+      }
+
+      // ── RÔLES ──
       const roleDefs = [
         { name:'👑 Owner', color:0xE74C3C, hoist:true, perms:[PermissionFlagsBits.Administrator] },
         { name:'⚡ Admin', color:0xE67E22, hoist:true, perms:[PermissionFlagsBits.Administrator] },
         { name:'🛡️ Modérateur', color:0x3498DB, hoist:true, perms:[PermissionFlagsBits.ModerateMembers, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.KickMembers, PermissionFlagsBits.BanMembers, PermissionFlagsBits.ViewAuditLog] },
         { name:'🤝 Middleman', color:0x2ECC71, hoist:true, perms:[PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageThreads] },
         { name:'💎 Elite Trader', color:0x9B59B6, hoist:true, perms:[] },
+        { name:'👑 VIP', color:0xF1C40F, hoist:true, perms:[] },
         { name:'👑 Elite', color:0xF1C40F, hoist:false, perms:[] },
         { name:'⭐ Fiable', color:0xF1C40F, hoist:false, perms:[] },
         { name:'✅ Confirmé', color:0x27AE60, hoist:false, perms:[] },
         { name:'🆕 Nouveau', color:0x95A5A6, hoist:false, perms:[] },
         { name:'🔒 Non Vérifié', color:0x2C2F33, hoist:false, perms:[] },
       ];
+      // Create XP roles
+      for (const t of [...XP_MSG_TIERS, ...XP_VOCAL_TIERS]) {
+        if (!guild.roles.cache.find(r=>r.name===t.name)) {
+          await guild.roles.create({name:t.name,color:t.color,hoist:false}).catch(()=>{});
+        }
+      }
       const cr = {};
       for (const rd of roleDefs) {
         const ex = guild.roles.cache.find(r => r.name === rd.name);
         if (ex) {
           cr[rd.name] = ex;
-          if (rd.perms.length > 0) {
-            const permBits = rd.perms.reduce((acc, p) => acc | p, 0n);
-            await ex.setPermissions(permBits).catch(() => {});
-          }
+          if (rd.perms.length > 0) { const permBits = rd.perms.reduce((acc, p) => acc | p, 0n); await ex.setPermissions(permBits).catch(() => {}); }
           log.push(`♻️ Rôle: ${rd.name}`);
         } else {
           const permBits = rd.perms.length > 0 ? rd.perms.reduce((acc, p) => acc | p, 0n) : 0n;
@@ -602,8 +737,17 @@ const commands = [
         { name:'🔒 VÉRIFICATION', chs:[{name:'🔑┃verification',verif:true}] },
         { name:'📌 WENZY SYSTEM', chs:[{name:'📌┃règles-et-info'},{name:'📊┃leaderboard'},{name:'📋┃logs',staff:true},{name:'🔗┃link-roblox'}] },
         { name:'🗡️ MM2 TRADING', chs:[{name:'🗡️┃post-trades'},{name:'📬┃poster-un-trade'},{name:'🏆┃vouches'},{name:'🛡️┃middleman-panel',staff:true}] },
-        { name:'💬 COMMUNAUTÉ', chs:[{name:'💬┃général'},{name:'📺┃vidéos-wenzy'},{name:'🎙️┃vocal-général',voice:true}] },
-        { name:'🛒 ECONOMY', chs:[{name:'🛒┃boutique'}] },
+        { name:'💬 COMMUNAUTÉ', chs:[{name:'👋┃bienvenue',readonly:true},{name:'💬┃général'},{name:'📺┃vidéos-wenzy'}] },
+        { name:'🛒 ECONOMY', chs:[{name:'🛒┃boutique'},{name:'🪙┃classement-pièces',readonly:true}] },
+        { name:'🎙️ VOCAUX', chs:[
+          {name:'🏗️┃créer-un-vocal',vocal:false,createPv:true},
+          {name:'🔇┃afk',voice:true},
+          {name:'😴┃sleep',voice:true},
+          {name:'🎙️┃vocal-1',voice:true},
+          {name:'🎙️┃vocal-2',voice:true},
+          {name:'🎙️┃vocal-3',voice:true},
+        ]},
+        { name:'🗂️ VOCAUX PRIVÉS', chs:[] },
       ];
       const cm = {};
       for (const cd of catDefs) {
@@ -617,6 +761,9 @@ const commands = [
           } else if (ch.staff) {
             pows.push({id:guild.id,deny:[PermissionFlagsBits.ViewChannel]});
             for(const r of admins)pows.push({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]});
+          } else if (ch.readonly) {
+            pows.push({id:guild.id,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]});
+            if(nonv)pows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
           } else {
             pows.push({id:guild.id,allow:[PermissionFlagsBits.ViewChannel]});
             if(nonv)pows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
@@ -626,20 +773,23 @@ const commands = [
         }
       }
 
+      // ── EMBED VÉRIFICATION ──
       const verifCh = cm['🔑┃verification'];
       if (verifCh) {
-        await verifCh.send({ embeds:[new EmbedBuilder().setColor(C.primary).setTitle('🔑 Vérification Roblox').setDescription(['**Bienvenue sur le serveur !** 👋','','Pour accéder à tous les salons, tu dois lier ton compte Roblox.','','**Étape 1** — Clique sur le bouton ci-dessous','**Étape 2** — Entre ton pseudo Roblox dans le formulaire','**Étape 3** — Colle le code généré dans ta bio Roblox','**Étape 4** — Reviens ici et clique Confirmer','','> ✅ Une fois vérifié, tu obtiens le rôle **🆕 Nouveau** et accès à tous les salons.'].join('\n')).setFooter({text:'Wenzy Bot v4 — Vérification via API Roblox officielle'})],
+        await verifCh.send({ embeds:[new EmbedBuilder().setColor(C.primary).setTitle('🔑 Vérification Roblox').setDescription(['**Bienvenue sur le serveur !** 👋','','Pour accéder à tous les salons, tu dois lier ton compte Roblox.','','**Étape 1** — Clique sur le bouton ci-dessous','**Étape 2** — Entre ton pseudo Roblox dans le formulaire','**Étape 3** — Colle le code généré dans ta bio Roblox','**Étape 4** — Reviens ici et clique Confirmer','','> ✅ Une fois vérifié, tu obtiens le rôle **🆕 Nouveau** et accès à tous les salons.'].join('\n')).setFooter({text:'Wenzy Bot v5'})],
           components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_link_start').setLabel('🔗 Lier mon compte Roblox').setStyle(ButtonStyle.Primary))] });
         log.push('✅ Embed vérification');
       }
 
+      // ── EMBED POSTER UN TRADE ──
       const ptCh = cm['📬┃poster-un-trade'];
       if (ptCh) {
-        await ptCh.send({ embeds:[new EmbedBuilder().setColor(C.primary).setTitle('📬 Poster un Trade MM2').setDescription(['Clique sur le bouton pour créer un trade.','','• Indique ce que tu offres (séparés par virgules)','• Indique ce que tu cherches en échange','','_Le trade sera publié dans **post-trades** automatiquement avec les valeurs et TOTAL VALUE._'].join('\n'))],
+        await ptCh.send({ embeds:[new EmbedBuilder().setColor(C.primary).setTitle('📬 Poster un Trade MM2').setDescription(['Clique sur le bouton pour créer un trade.','','• Indique ce que tu offres (séparés par virgules)','• Indique la **Total Value** de ton offre','• Indique ce que tu cherches','• Indique la **Total Value** de ce que tu cherches (optionnel)','','_Le trade sera publié dans **post-trades** automatiquement._'].join('\n'))],
           components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_post_trade').setLabel('🗡️ Poster un Trade').setStyle(ButtonStyle.Success))] });
         log.push('✅ Embed poster-un-trade');
       }
 
+      // ── EMBED LINK ROBLOX ──
       const linkCh = cm['🔗┃link-roblox'];
       if (linkCh) {
         await linkCh.send({ embeds:[new EmbedBuilder().setColor(C.info).setTitle('🔗 Lier ton compte Roblox').setDescription(['Pour participer aux trades, tu dois lier ton compte Roblox à ton Discord.','','**Comment faire :**','**1.** Clique sur le bouton **"Lier mon compte"** ci-dessous','**2.** Entre ton pseudo Roblox exact','**3.** Le bot génère un code unique','**4.** Colle ce code dans ta **bio Roblox**','**5.** Reviens ici et clique **"Vérifier maintenant"**','','> ✅ Une fois vérifié, tu obtiens le rôle **🆕 Nouveau** et l\'accès complet au serveur.'].join('\n')).setFooter({text:'Vérification via API Roblox officielle — sécurisé'})],
@@ -647,13 +797,25 @@ const commands = [
         log.push('✅ Embed link-roblox');
       }
 
+      // ── BOUTIQUE ──
       const boutiqueCh = cm['🛒┃boutique'];
       if (boutiqueCh) { await postShopEmbed(boutiqueCh); log.push('✅ Boutique embed'); }
+
+      // ── EMBED CRÉER VOCAL PRIVÉ ──
+      const pvCh = cm['🏗️┃créer-un-vocal'];
+      if (pvCh) {
+        await pvCh.send({ embeds:[new EmbedBuilder().setColor(C.primary).setTitle('🎙️ Créer un Vocal Privé').setDescription(['Clique sur le bouton pour créer ton vocal privé.','','**Commandes dans ton vocal :**','`!open` — Ouvrir à tout le monde','`!close` — Fermer (invitation uniquement)','`!add @user` — Inviter quelqu\'un','`!kick @user` — Expulser quelqu\'un','`!rename <nom>` — Renommer le vocal','','> ⚠️ AFK et Sleep ne comptent pas de pièces/XP'].join('\n'))],
+          components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_create_vocal').setLabel('🎙️ Créer un vocal privé').setStyle(ButtonStyle.Primary))] });
+        log.push('✅ Embed créer-vocal');
+      }
+
       await updateLeaderboardChannel(guild);
-      log.push('✅ Leaderboard initialisé');
-      await interaction.editReply({ embeds:[new EmbedBuilder().setColor(C.success).setTitle('🏗️ Setup v4 terminé !')
+      await updateCoinsLeaderboardChannel(guild);
+      log.push('✅ Leaderboards initialisés');
+
+      await interaction.editReply({ embeds:[new EmbedBuilder().setColor(C.success).setTitle('🏗️ Setup v5 terminé !')
         .setDescription(log.map(l=>`\`${l}\``).join('\n').slice(0,3900))
-        .addFields({name:'📋 Prochaines étapes',value:['1. Donne-toi le rôle **👑 Owner**','2. `/addserver <lien>` pour les serveurs privés MM2','3. Les screenshots trades → validation MANUELLE par staff','4. Nouvelles commandes : `/addxp`, `/addcoins`, `/giveaway`, `/shopadd`'].join('\n')}).setTimestamp()] });
+        .addFields({name:'📋 Prochaines étapes',value:['1. Donne-toi le rôle **👑 Owner**','2. `/addserver <lien>` pour les serveurs privés MM2','3. Screenshots trades → validation MANUELLE par staff','4. Nouvelles commandes : `/addxp`, `/addcoins`, `/giveaway`, `/shopadd`'].join('\n')}).setTimestamp()] });
     }
   },
 
@@ -686,7 +848,7 @@ const commands = [
       .addSubcommand(s=>s.setName('check').setDescription('⚖️ Price check').addStringOption(o=>o.setName('offre').setDescription('Armes offertes').setRequired(true)).addStringOption(o=>o.setName('recois').setDescription('Armes reçues').setRequired(true))),
     async execute(interaction) {
       const sub=interaction.options.getSubcommand(),did=interaction.user.id;
-      if(sub==='post'){await interaction.deferReply({ephemeral:true});await postTrade(interaction,did,interaction.options.getString('offre'),interaction.options.getString('cherche'));}
+      if(sub==='post'){await interaction.deferReply({ephemeral:true});await postTrade(interaction,did,interaction.options.getString('offre'),interaction.options.getString('cherche'),0,0);}
       else if(sub==='cancel'){await interaction.deferReply({ephemeral:true});await cancelTrade(interaction,did,interaction.options.getInteger('id'));}
       else if(sub==='check'){
         await interaction.deferReply({ephemeral:true});
@@ -763,11 +925,7 @@ const commands = [
     async execute(interaction){await interaction.deferReply();const hot=db.prepare('SELECT * FROM trades WHERE status=? ORDER BY offer_value DESC LIMIT 5').all('open');if(!hot.length)return interaction.editReply('📭 Aucun hot trade en ce moment.');const embeds=hot.map(t=>{const poster=db.prepare('SELECT * FROM users WHERE discord_id=?').get(t.poster_id);return tradeEmbed(t,poster);});await interaction.editReply({content:'🔥 **Les 5 plus gros trades ouverts en ce moment :**',embeds:embeds.slice(0,5)});}
   },
 
-  // ══════════════════════════════════════════
-  //  NOUVELLES COMMANDES v4
-  // ══════════════════════════════════════════
-
-  // /addxp — ajouter XP à un membre (staff)
+  // /addxp
   { data: new SlashCommandBuilder().setName('addxp').setDescription('✨ (Staff) Ajouter de l\'XP à un membre')
       .addUserOption(o=>o.setName('membre').setDescription('Membre cible').setRequired(true))
       .addIntegerOption(o=>o.setName('quantite').setDescription('Quantité XP (peut être négatif)').setRequired(true))
@@ -779,15 +937,16 @@ const commands = [
       const target=interaction.options.getUser('membre'),amount=interaction.options.getInteger('quantite'),reason=interaction.options.getString('raison')??' — ';
       db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(target.id);
       db.prepare('UPDATE users SET xp=MAX(0,xp+?) WHERE discord_id=?').run(amount,target.id);
-      const u=db.prepare('SELECT xp FROM users WHERE discord_id=?').get(target.id);
+      const u=db.prepare('SELECT xp,vocal_minutes FROM users WHERE discord_id=?').get(target.id);
+      const member = await interaction.guild.members.fetch(target.id).catch(()=>null);
+      if (member) await applyXpRoles(interaction.guild, member, u.xp, u.vocal_minutes??0);
       const logsCh=interaction.guild.channels.cache.find(c=>c.name.includes('logs'));
       if(logsCh)await logsCh.send({embeds:[new EmbedBuilder().setColor(amount>=0?C.success:C.warning).setTitle(`${amount>=0?'➕':'➖'} XP modifié`).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'✨ Modification',value:`${amount>=0?'+':''}${amount} XP`,inline:true},{name:'📊 Total',value:`${u.xp} XP`,inline:true},{name:'📝 Raison',value:reason,inline:false},{name:'🛡️ Staff',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp()]});
-      await interaction.editReply(`✅ <@${target.id}> → **${amount>=0?'+':''}${amount} XP** | Total : **${u.xp} XP**`);
-      try { await interaction.guild.members.fetch(target.id).then(m=>m.send(`✨ **${amount>=0?'+':''}${amount} XP** ${reason!=' — '?`(${reason})`:''}sur le serveur Wenzy ! Total : **${u.xp} XP**`)).catch(()=>{}); } catch {}
+      await interaction.editReply(`✅ <@${target.id}> → **${amount>=0?'+':''}${amount} XP** | Total : **${u.xp} XP** | ${getXpMsgTier(u.xp).name}`);
     }
   },
 
-  // /addcoins — ajouter pièces à un membre (staff)
+  // /addcoins
   { data: new SlashCommandBuilder().setName('addcoins').setDescription('🪙 (Staff) Ajouter des pièces à un membre')
       .addUserOption(o=>o.setName('membre').setDescription('Membre cible').setRequired(true))
       .addIntegerOption(o=>o.setName('quantite').setDescription('Quantité (peut être négatif)').setRequired(true))
@@ -803,11 +962,11 @@ const commands = [
       const logsCh=interaction.guild.channels.cache.find(c=>c.name.includes('logs'));
       if(logsCh)await logsCh.send({embeds:[new EmbedBuilder().setColor(amount>=0?C.success:C.warning).setTitle(`${amount>=0?'➕':'➖'} Pièces modifiées`).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'🪙 Modification',value:`${amount>=0?'+':''}${amount} 🪙`,inline:true},{name:'💰 Total',value:`${u.coins} 🪙`,inline:true},{name:'📝 Raison',value:reason,inline:false},{name:'🛡️ Staff',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp()]});
       await interaction.editReply(`✅ <@${target.id}> → **${amount>=0?'+':''}${amount} 🪙** | Total : **${u.coins} 🪙**`);
-      await updateShopCoinLeaderboard(interaction.guild);
+      await updateCoinsLeaderboardChannel(interaction.guild);
     }
   },
 
-  // /giveaway — système complet
+  // /giveaway
   { data: new SlashCommandBuilder().setName('giveaway').setDescription('🎉 Système de giveaway')
       .addSubcommand(s=>s.setName('start').setDescription('🎁 Lancer un giveaway')
         .addStringOption(o=>o.setName('prix').setDescription('Prix du giveaway').setRequired(true))
@@ -824,73 +983,29 @@ const commands = [
       await interaction.deferReply({ephemeral:true});
       if(!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
       const sub=interaction.options.getSubcommand();
-
       if (sub === 'start') {
-        const prize=interaction.options.getString('prix');
-        const dureeStr=interaction.options.getString('duree');
-        const winnersCount=interaction.options.getInteger('gagnants')??1;
-        const targetCh=interaction.options.getChannel('salon')??interaction.channel;
-
-        // Parse durée
+        const prize=interaction.options.getString('prix'),dureeStr=interaction.options.getString('duree'),winnersCount=interaction.options.getInteger('gagnants')??1,targetCh=interaction.options.getChannel('salon')??interaction.channel;
         let seconds=0;
         const dMatch=dureeStr.match(/(\d+)d/);const hMatch=dureeStr.match(/(\d+)h/);const mMatch=dureeStr.match(/(\d+)m/);const sMatch=dureeStr.match(/(\d+)s/);
-        if(dMatch)seconds+=parseInt(dMatch[1])*86400;
-        if(hMatch)seconds+=parseInt(hMatch[1])*3600;
-        if(mMatch)seconds+=parseInt(mMatch[1])*60;
-        if(sMatch)seconds+=parseInt(sMatch[1]);
+        if(dMatch)seconds+=parseInt(dMatch[1])*86400;if(hMatch)seconds+=parseInt(hMatch[1])*3600;if(mMatch)seconds+=parseInt(mMatch[1])*60;if(sMatch)seconds+=parseInt(sMatch[1]);
         if(seconds<60)return interaction.editReply('❌ Durée minimum : 1 minute.');
-
         const endsAt=Math.floor(Date.now()/1000)+seconds;
         const res=db.prepare('INSERT INTO giveaways (channel_id,prize,winners_count,host_id,ends_at) VALUES (?,?,?,?,?)').run(targetCh.id,prize,winnersCount,interaction.user.id,endsAt);
         const gwId=res.lastInsertRowid;
-
-        const embed=new EmbedBuilder().setColor(C.gold)
-          .setTitle(`🎉 GIVEAWAY — ${prize}`)
-          .setDescription([`Clique sur **🎉 Participer** pour entrer !`,'',`🎁 **Prix :** ${prize}`,`🏆 **Gagnants :** ${winnersCount}`,`⏳ **Fin :** <t:${endsAt}:R> (<t:${endsAt}:f>)`,`🎲 **ID :** #${gwId}`,`📢 **Organisé par :** <@${interaction.user.id}>`].join('\n'))
-          .setFooter({text:`Giveaway #${gwId} — Clique 🎉 pour participer !`}).setTimestamp();
+        const embed=new EmbedBuilder().setColor(C.gold).setTitle(`🎉 GIVEAWAY — ${prize}`).setDescription([`Clique sur **🎉 Participer** pour entrer !`,'',`🎁 **Prix :** ${prize}`,`🏆 **Gagnants :** ${winnersCount}`,`⏳ **Fin :** <t:${endsAt}:R> (<t:${endsAt}:f>)`,`🎲 **ID :** #${gwId}`,`📢 **Organisé par :** <@${interaction.user.id}>`].join('\n')).setFooter({text:`Giveaway #${gwId} — Clique 🎉 !`}).setTimestamp();
         const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`gw_join_${gwId}`).setLabel('🎉 Participer').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId(`gw_leave_${gwId}`).setLabel('❌ Se retirer').setStyle(ButtonStyle.Secondary));
         const msg=await targetCh.send({content:`@everyone 🎉 **Nouveau giveaway !**`,embeds:[embed],components:[row]});
         db.prepare('UPDATE giveaways SET message_id=? WHERE id=?').run(msg.id,gwId);
-        await interaction.editReply(`✅ Giveaway **#${gwId}** lancé dans <#${targetCh.id}> ! Fin dans **${dureeStr}**.`);
-        // Schedule end
+        await interaction.editReply(`✅ Giveaway **#${gwId}** lancé !`);
         setTimeout(()=>endGiveaway(interaction.client,gwId),seconds*1000);
       }
-
-      else if (sub === 'end') {
-        const gwId=interaction.options.getInteger('id');
-        const gw=db.prepare('SELECT * FROM giveaways WHERE id=?').get(gwId);
-        if(!gw)return interaction.editReply('❌ Giveaway introuvable.');
-        if(gw.status!=='active')return interaction.editReply('❌ Ce giveaway est déjà terminé.');
-        await endGiveaway(interaction.client,gwId);
-        await interaction.editReply(`✅ Giveaway **#${gwId}** terminé manuellement.`);
-      }
-
-      else if (sub === 'reroll') {
-        const gwId=interaction.options.getInteger('id');
-        const gw=db.prepare('SELECT * FROM giveaways WHERE id=?').get(gwId);
-        if(!gw)return interaction.editReply('❌ Giveaway introuvable.');
-        const participants=JSON.parse(gw.participants||'[]');
-        if(participants.length===0)return interaction.editReply('❌ Aucun participant à reroll.');
-        const shuffled=[...participants].sort(()=>Math.random()-0.5);
-        const newWinners=shuffled.slice(0,Math.min(gw.winners_count,participants.length));
-        db.prepare('UPDATE giveaways SET winners=? WHERE id=?').run(JSON.stringify(newWinners),gwId);
-        try {
-          const ch=await interaction.client.channels.fetch(gw.channel_id).catch(()=>null);
-          if(ch)await ch.send(`🔄 **Reroll Giveaway #${gwId} — ${gw.prize}**\n🏆 Nouveaux gagnants : ${newWinners.map(w=>`<@${w}>`).join(', ')}`);
-        } catch {}
-        await interaction.editReply(`✅ Reroll effectué ! Nouveaux gagnants : ${newWinners.map(w=>`<@${w}>`).join(', ')}`);
-      }
-
-      else if (sub === 'list') {
-        const active=db.prepare('SELECT * FROM giveaways WHERE status=? ORDER BY ends_at ASC').all('active');
-        if(!active.length)return interaction.editReply('📭 Aucun giveaway actif.');
-        const list=active.map(g=>{const participants=JSON.parse(g.participants||'[]');return`**#${g.id}** — ${g.prize} | 🏆 ${g.winners_count} gagnant(s) | 👥 ${participants.length} participant(s) | Fin : <t:${g.ends_at}:R>`;}).join('\n');
-        await interaction.editReply({embeds:[new EmbedBuilder().setColor(C.gold).setTitle('🎉 Giveaways actifs').setDescription(list).setTimestamp()]});
-      }
+      else if (sub === 'end') { const gwId=interaction.options.getInteger('id');const gw=db.prepare('SELECT * FROM giveaways WHERE id=?').get(gwId);if(!gw)return interaction.editReply('❌ Introuvable.');if(gw.status!=='active')return interaction.editReply('❌ Déjà terminé.');await endGiveaway(interaction.client,gwId);await interaction.editReply(`✅ Giveaway **#${gwId}** terminé.`); }
+      else if (sub === 'reroll') { const gwId=interaction.options.getInteger('id');const gw=db.prepare('SELECT * FROM giveaways WHERE id=?').get(gwId);if(!gw)return interaction.editReply('❌ Introuvable.');const participants=JSON.parse(gw.participants||'[]');if(!participants.length)return interaction.editReply('❌ Aucun participant.');const newWinners=[...participants].sort(()=>Math.random()-0.5).slice(0,Math.min(gw.winners_count,participants.length));db.prepare('UPDATE giveaways SET winners=? WHERE id=?').run(JSON.stringify(newWinners),gwId);try{const ch=await interaction.client.channels.fetch(gw.channel_id).catch(()=>null);if(ch)await ch.send(`🔄 **Reroll #${gwId} — ${gw.prize}**\n🏆 Nouveaux gagnants : ${newWinners.map(w=>`<@${w}>`).join(', ')}`);}catch{}await interaction.editReply(`✅ Reroll effectué !`); }
+      else if (sub === 'list') { const active=db.prepare('SELECT * FROM giveaways WHERE status=? ORDER BY ends_at ASC').all('active');if(!active.length)return interaction.editReply('📭 Aucun giveaway actif.');const list=active.map(g=>{const p=JSON.parse(g.participants||'[]');return`**#${g.id}** — ${g.prize} | 🏆 ${g.winners_count} | 👥 ${p.length} | Fin : <t:${g.ends_at}:R>`;}).join('\n');await interaction.editReply({embeds:[new EmbedBuilder().setColor(C.gold).setTitle('🎉 Giveaways actifs').setDescription(list).setTimestamp()]}); }
     }
   },
 
-  // /shopadd — ajouter un item à la boutique
+  // /shopadd
   { data: new SlashCommandBuilder().setName('shopadd').setDescription('🛒 (Admin) Ajouter/modifier un item boutique')
       .addStringOption(o=>o.setName('nom').setDescription('Nom de l\'item').setRequired(true))
       .addIntegerOption(o=>o.setName('prix').setDescription('Prix en pièces').setRequired(true))
@@ -902,14 +1017,13 @@ const commands = [
       await interaction.deferReply({ephemeral:true});
       const nom=interaction.options.getString('nom'),prix=interaction.options.getInteger('prix'),desc=interaction.options.getString('description'),type=interaction.options.getString('type'),emoji=interaction.options.getString('emoji')??'🎁';
       db.prepare('INSERT INTO shop_items (name,description,price,item_type,emoji,active,added_by) VALUES (?,?,?,?,?,1,?) ON CONFLICT(name) DO UPDATE SET description=excluded.description,price=excluded.price,item_type=excluded.item_type,emoji=excluded.emoji,active=1,added_by=excluded.added_by').run(nom,desc,prix,type,emoji,interaction.user.id);
-      // Refresh boutique embed
       const boutiqueCh=interaction.guild.channels.cache.find(c=>c.name.includes('boutique'));
       if(boutiqueCh)await postShopEmbed(boutiqueCh);
-      await interaction.editReply(`✅ Item **${nom}** ajouté/mis à jour dans la boutique !`);
+      await interaction.editReply(`✅ Item **${nom}** ajouté/mis à jour !`);
     }
   },
 
-  // /shopremove — retirer un item de la boutique
+  // /shopremove
   { data: new SlashCommandBuilder().setName('shopremove').setDescription('🛒 (Admin) Retirer un item de la boutique')
       .addStringOption(o=>o.setName('nom').setDescription('Nom exact de l\'item').setRequired(true))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
@@ -917,26 +1031,21 @@ const commands = [
       await interaction.deferReply({ephemeral:true});
       const nom=interaction.options.getString('nom');
       const r=db.prepare('UPDATE shop_items SET active=0 WHERE name=?').run(nom);
-      if(!r.changes)return interaction.editReply(`❌ Item **${nom}** introuvable dans la boutique.`);
+      if(!r.changes)return interaction.editReply(`❌ Item **${nom}** introuvable.`);
       const boutiqueCh=interaction.guild.channels.cache.find(c=>c.name.includes('boutique'));
       if(boutiqueCh)await postShopEmbed(boutiqueCh);
-      await interaction.editReply(`✅ Item **${nom}** retiré de la boutique.`);
+      await interaction.editReply(`✅ Item **${nom}** retiré.`);
     }
-  },
-
-  // /configjeux
-  { data: new SlashCommandBuilder().setName('configjeux').setDescription('🎮 (Admin) Configurer le salon jeux').addChannelOption(o=>o.setName('salon').setDescription('Salon pour les jeux').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    async execute(interaction){await interaction.deferReply({ephemeral:true});const ch=interaction.options.getChannel('salon');await ch.send({embeds:[new EmbedBuilder().setColor(C.primary).setTitle('🎮 Salon Jeux').setDescription(['Bienvenue dans le salon jeux !','','**Jeux disponibles :**','• 🎯 Devinette armes MM2','• 🃏 Duel de values','• 🏆 Tournoi trades','','_Plus de jeux arrivent prochainement..._'].join('\n'))]});await interaction.editReply(`✅ Salon jeux configuré dans <#${ch.id}> !`);}
   },
 
   // /configvideo
   { data: new SlashCommandBuilder().setName('configvideo').setDescription('📺 (Admin) Configurer le salon vidéo Wenzy').addChannelOption(o=>o.setName('salon').setDescription('Salon pour les vidéos').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    async execute(interaction){await interaction.deferReply({ephemeral:true});const ch=interaction.options.getChannel('salon');process.env.VIDEO_CHANNEL_OVERRIDE=ch.id;await interaction.editReply(`✅ Salon vidéo Wenzy configuré sur <#${ch.id}> !`);}
+    async execute(interaction){await interaction.deferReply({ephemeral:true});const ch=interaction.options.getChannel('salon');process.env.VIDEO_CHANNEL_OVERRIDE=ch.id;await interaction.editReply(`✅ Salon vidéo configuré sur <#${ch.id}> !`);}
   },
 
 ];
 
-// ── SHOP EMBED (button handler) ──────────────────────────────
+// ── SHOP BUTTON HANDLER ──────────────────────────────────────
 async function handleButton(interaction) {
   const { customId, guild, user } = interaction;
 
@@ -952,17 +1061,41 @@ async function handleButton(interaction) {
     const modal=new ModalBuilder().setCustomId('modal_post_trade').setTitle('🗡️ Poster un Trade MM2');
     modal.addComponents(
       new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('trade_offre').setLabel('Armes que tu offres (virgules)').setStyle(TextInputStyle.Short).setPlaceholder('ex: Chroma Seer, Corrupt').setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('trade_offre_val').setLabel('Total Value de ton offre').setStyle(TextInputStyle.Short).setPlaceholder('ex: 255').setRequired(true)),
       new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('trade_cherche').setLabel('Ce que tu cherches').setStyle(TextInputStyle.Short).setPlaceholder('ex: Ancient Seer').setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('trade_cherche_val').setLabel('Total Value recherchée (optionnel, 0 si ?)').setStyle(TextInputStyle.Short).setPlaceholder('ex: 200').setRequired(false)),
     );
     return interaction.showModal(modal);
+  }
+
+  // ── CRÉER VOCAL PRIVÉ ──
+  if (customId==='btn_create_vocal') {
+    await interaction.deferReply({ephemeral:true});
+    const member = await guild.members.fetch(user.id).catch(()=>null);
+    if (!member) return interaction.editReply('❌ Impossible de te trouver.');
+    if (!member.voice.channel) return interaction.editReply('❌ Tu dois être dans un vocal pour en créer un privé. Rejoins un vocal d\'abord !');
+    const existing = db.prepare('SELECT * FROM private_vocals WHERE owner_id=?').get(user.id);
+    if (existing) {
+      const existingCh = guild.channels.cache.get(existing.channel_id);
+      if (existingCh) return interaction.editReply(`❌ Tu as déjà un vocal privé : <#${existing.channel_id}>`);
+      else db.prepare('DELETE FROM private_vocals WHERE owner_id=?').run(user.id);
+    }
+    const ch = await createPrivateVocal(guild, member);
+    if (!ch) return interaction.editReply('❌ Erreur lors de la création du vocal.');
+    return interaction.editReply(`✅ Vocal privé créé : **${ch.name}**\n\nCommandes disponibles dans ton vocal :\n\`!open\` — Ouvrir à tout le monde\n\`!close\` — Fermer\n\`!add @user\` — Inviter\n\`!kick @user\` — Expulser\n\`!rename <nom>\` — Renommer`);
   }
 
   if (customId==='shop_mes_pieces') {
     await interaction.deferReply({ephemeral:true});
     const u=db.prepare('SELECT * FROM users WHERE discord_id=?').get(user.id);
-    const coins=u?.coins??0,xp=u?.xp??0;
+    const coins=u?.coins??0,xp=u?.xp??0,vocMin=u?.vocal_minutes??0;
     const purchases=db.prepare('SELECT * FROM shop_purchases WHERE discord_id=? ORDER BY created_at DESC LIMIT 5').all(user.id);
-    return interaction.editReply({embeds:[new EmbedBuilder().setColor(C.gold).setTitle('🪙 Ton solde').addFields({name:'💰 Pièces',value:`**${coins} 🪙**`,inline:true},{name:'✨ XP',value:`**${xp}**`,inline:true},{name:'📦 Derniers achats',value:purchases.length?purchases.map(p=>`• ${p.item_type} — ${p.coins_spent} 🪙`).join('\n'):'_Aucun achat_',inline:false}).setTimestamp()]});
+    return interaction.editReply({embeds:[new EmbedBuilder().setColor(C.gold).setTitle('🪙 Ton solde').addFields(
+      {name:'💰 Pièces',value:`**${coins} 🪙**`,inline:true},
+      {name:'✨ XP',value:`**${xp}** — ${getXpMsgTier(xp).name}`,inline:true},
+      {name:'🎙️ Vocal',value:`**${vocMin} min** — ${getVocalTier(vocMin).name}`,inline:true},
+      {name:'📦 Derniers achats',value:purchases.length?purchases.map(p=>`• ${p.item_type} — ${p.coins_spent} 🪙`).join('\n'):'_Aucun achat_',inline:false}
+    ).setTimestamp()]});
   }
 
   if (customId==='shop_role_custom') {
@@ -971,7 +1104,7 @@ async function handleButton(interaction) {
     const modal=new ModalBuilder().setCustomId('modal_shop_role_custom').setTitle('🎨 Acheter un rôle custom');
     modal.addComponents(
       new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('role_name').setLabel('Nom du rôle').setStyle(TextInputStyle.Short).setPlaceholder('ex: 🌙 LunarTrader').setRequired(true).setMaxLength(30)),
-      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('role_color').setLabel('Couleur hex (ex: #FF5733) ou "dégradé"').setStyle(TextInputStyle.Short).setPlaceholder('#FF5733').setRequired(true).setMaxLength(20)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('role_color').setLabel('Couleur hex (ex: #FF5733)').setStyle(TextInputStyle.Short).setPlaceholder('#FF5733').setRequired(true).setMaxLength(20)),
     );
     return interaction.showModal(modal);
   }
@@ -985,7 +1118,7 @@ async function handleButton(interaction) {
     const vipRole=guild.roles.cache.find(r=>r.name==='👑 VIP')||await guild.roles.create({name:'👑 VIP',color:0xF1C40F,hoist:true});
     const member=await guild.members.fetch(user.id).catch(()=>null);
     if(member)await member.roles.add(vipRole).catch(()=>{});
-    await updateShopCoinLeaderboard(guild);
+    await updateCoinsLeaderboardChannel(guild);
     return interaction.editReply('✅ **Rôle VIP** acheté et attribué !');
   }
 
@@ -998,26 +1131,22 @@ async function handleButton(interaction) {
     const eliteRole=guild.roles.cache.find(r=>r.name==='💎 Elite Trader');
     const member=await guild.members.fetch(user.id).catch(()=>null);
     if(member&&eliteRole)await member.roles.add(eliteRole).catch(()=>{});
-    await updateShopCoinLeaderboard(guild);
+    await updateCoinsLeaderboardChannel(guild);
     return interaction.editReply('✅ **Badge Elite** acheté !');
   }
 
-  // ── GIVEAWAY BUTTONS ──────────────────────────────────────
+  // ── GIVEAWAY BUTTONS ──
   if (customId.startsWith('gw_join_')) {
     await interaction.deferReply({ephemeral:true});
     const gwId=parseInt(customId.replace('gw_join_',''));
     const gw=db.prepare('SELECT * FROM giveaways WHERE id=?').get(gwId);
     if(!gw||gw.status!=='active')return interaction.editReply('❌ Ce giveaway est terminé.');
     const participants=JSON.parse(gw.participants||'[]');
-    if(participants.includes(user.id))return interaction.editReply('⚠️ Tu participes déjà à ce giveaway !');
+    if(participants.includes(user.id))return interaction.editReply('⚠️ Tu participes déjà !');
     participants.push(user.id);
     db.prepare('UPDATE giveaways SET participants=? WHERE id=?').run(JSON.stringify(participants),gwId);
-    // Update embed
-    try {
-      const ch=await interaction.client.channels.fetch(gw.channel_id).catch(()=>null);
-      if(ch&&gw.message_id){const msg=await ch.messages.fetch(gw.message_id).catch(()=>null);if(msg){const embed=msg.embeds[0];if(embed){const newEmbed=EmbedBuilder.from(embed).setFooter({text:`Giveaway #${gwId} — ${participants.length} participant(s) | Clique 🎉 pour participer !`});await msg.edit({embeds:[newEmbed]}).catch(()=>{});}}}
-    } catch {}
-    return interaction.editReply(`✅ Tu participes au giveaway **${gw.prize}** ! 🎉`);
+    try{const ch=await interaction.client.channels.fetch(gw.channel_id).catch(()=>null);if(ch&&gw.message_id){const msg=await ch.messages.fetch(gw.message_id).catch(()=>null);if(msg){const embed=msg.embeds[0];if(embed){const newEmbed=EmbedBuilder.from(embed).setFooter({text:`Giveaway #${gwId} — ${participants.length} participant(s) | Clique 🎉 !`});await msg.edit({embeds:[newEmbed]}).catch(()=>{});}}}}catch{}
+    return interaction.editReply(`✅ Tu participes au giveaway **${gw.prize}** !`);
   }
 
   if (customId.startsWith('gw_leave_')) {
@@ -1030,7 +1159,7 @@ async function handleButton(interaction) {
     return interaction.editReply('❌ Tu t\'es retiré du giveaway.');
   }
 
-  // ── STAFF MANUAL VERIFICATION v4 ─────────────────────────
+  // ── STAFF MANUAL VERIFICATION ──
   if (customId.startsWith('staff_validate_')) {
     await interaction.deferReply({ephemeral:true});
     if(!hasStaffPerm(interaction.member))return interaction.editReply('❌ Réservé au staff.');
@@ -1039,7 +1168,6 @@ async function handleButton(interaction) {
     if(!trade)return interaction.editReply('❌ Trade introuvable.');
     if(trade.status==='completed')return interaction.editReply('⚠️ Ce trade est déjà complété.');
     await completeTrade(guild,tid,trade.screenshot_url??null);
-    // Log
     const logsCh=guild.channels.cache.find(c=>c.name.includes('logs'));
     if(logsCh)await logsCh.send({embeds:[new EmbedBuilder().setColor(C.success).setTitle('✅ Trade validé manuellement').addFields({name:'🗡️ Trade',value:`#${tid}`,inline:true},{name:'🛡️ Validé par',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp()]});
     return interaction.editReply(`✅ Trade **#${tid}** validé !`);
@@ -1051,13 +1179,11 @@ async function handleButton(interaction) {
     const tid=parseInt(customId.replace('staff_reject_',''));
     const trade=db.prepare('SELECT * FROM trades WHERE id=?').get(tid);
     if(!trade)return interaction.editReply('❌ Trade introuvable.');
-    if(trade.thread_id){
-      try{const t=await guild.channels.fetch(trade.thread_id).catch(()=>null);if(t)await t.send(`❌ **Screenshot rejeté par le staff** (<@${interaction.user.id}>)\n\nMerci de renvoyer un screenshot valide montrant :\n• Écran **"YOU HAVE ACCEPTED"** visible\n• Armes échangées dans l'interface\n• Vrai screenshot du jeu (pas montage)`);}catch{}
-    }
-    return interaction.editReply(`⚠️ Screenshot du trade **#${tid}** rejeté — les joueurs ont été notifiés.`);
+    if(trade.thread_id){try{const t=await guild.channels.fetch(trade.thread_id).catch(()=>null);if(t)await t.send(`❌ **Screenshot rejeté par le staff** (<@${interaction.user.id}>)\n\nMerci de renvoyer un screenshot valide montrant :\n• Écran **"YOU HAVE ACCEPTED"** visible\n• Armes échangées dans l'interface`);}catch{}}
+    return interaction.editReply(`⚠️ Screenshot du trade **#${tid}** rejeté.`);
   }
 
-  // ── TRADE BUTTONS ─────────────────────────────────────────
+  // ── TRADE BUTTONS ──
   if (customId.startsWith('trade_accept_')) {
     await interaction.deferReply({ephemeral:true});
     const tid=parseInt(customId.replace('trade_accept_',''));
@@ -1079,14 +1205,13 @@ async function handleButton(interaction) {
       const server=getFreeServer();
       if(server){db.prepare('UPDATE private_servers SET in_use=1,trade_id=? WHERE id=?').run(tid,server.id);db.prepare('UPDATE trades SET server_link=? WHERE id=?').run(server.link,tid);}
       await thread.send({embeds:[threadSummaryEmbed(updated,poster,accepter)],components:[threadButtons(tid)]});
-      if(server)await thread.send(`🎮 **Serveur Privé MM2 — Rejoins maintenant :**\n${server.link}`);
-      await thread.send('📸 **Exemple de screenshot attendu — envoie un screenshot identique après le trade :**');
+      if(server)await thread.send(`🎮 **Serveur Privé MM2 :**\n${server.link}`);
+      await thread.send('📸 **Exemple de screenshot attendu :**');
       if(fs.existsSync(REF_SCREEN_PATH))await thread.send({files:[REF_SCREEN_PATH]});
-      // Ping middleman panel
       const mmPanel=guild.channels.cache.find(c=>c.name.includes('middleman-panel'));
       if(mmPanel){const mmRole=guild.roles.cache.find(r=>r.name.includes('Middleman'));await mmPanel.send({content:mmRole?`<@&${mmRole.id}>`:'🛡️ Middlemen',embeds:[mmPanelEmbed(updated,poster,accepter)],components:[mmButtons(tid)]});}
     }
-    return interaction.editReply(`✅ Trade **#${tid}** accepté ! Regarde le thread privé créé.`);
+    return interaction.editReply(`✅ Trade **#${tid}** accepté !`);
   }
 
   if(customId.startsWith('trade_cancel_')){await interaction.deferReply({ephemeral:true});return cancelTrade(interaction,user.id,parseInt(customId.replace('trade_cancel_','')));}
@@ -1112,12 +1237,13 @@ async function handleButton(interaction) {
 
   if(customId.startsWith('mm_cancel_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_cancel_',''));db.prepare('UPDATE trades SET status=? WHERE id=?').run('cancelled',tid);db.prepare('UPDATE private_servers SET in_use=0,trade_id=NULL WHERE trade_id=?').run(tid);return interaction.editReply(`❌ Trade **#${tid}** annulé.`);}
 
-  if(customId.startsWith('mm_report_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_report_',''));db.prepare('UPDATE trades SET status=? WHERE id=?').run('disputed',tid);const logsCh=guild.channels.cache.find(c=>c.name.includes('logs'));if(logsCh)await logsCh.send(`🚨 **SCAM REPORT** — Trade **#${tid}** signalé par <@${user.id}>.`);return interaction.editReply('🚨 Scam reporté. Enquête ouverte.');}
+  if(customId.startsWith('mm_report_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_report_',''));db.prepare('UPDATE trades SET status=? WHERE id=?').run('disputed',tid);const logsCh=guild.channels.cache.find(c=>c.name.includes('logs'));if(logsCh)await logsCh.send(`🚨 **SCAM REPORT** — Trade **#${tid}** signalé par <@${user.id}>.`);return interaction.editReply('🚨 Scam reporté.');}
 }
 
 // ── MODAL HANDLER ────────────────────────────────────────────
 async function handleModal(interaction) {
   const{customId}=interaction;
+
   if(customId==='modal_link_roblox'){
     await interaction.deferReply({ephemeral:true});
     const username=interaction.fields.getTextInputValue('roblox_username'),did=interaction.user.id;
@@ -1130,24 +1256,33 @@ async function handleModal(interaction) {
     try{const nv=interaction.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');if(nv&&!interaction.member.roles.cache.has(nv.id))await interaction.member.roles.add(nv);}catch{}
     await interaction.editReply({embeds:[new EmbedBuilder().setColor(C.info).setTitle('🔗 Code généré !').setDescription([`Compte : **${rb.name}**`,'','**Code à coller dans ta bio Roblox :**',`\`\`\`${code}\`\`\``,'→ [Modifier ta bio](https://www.roblox.com/my/account#!/info)','','Reviens et clique Vérifier.'].join('\n'))],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_verify_now').setLabel('✅ Vérifier maintenant').setStyle(ButtonStyle.Success))]});
   }
-  if(customId==='modal_post_trade'){await interaction.deferReply({ephemeral:true});return postTrade(interaction,interaction.user.id,interaction.fields.getTextInputValue('trade_offre'),interaction.fields.getTextInputValue('trade_cherche'));}
+
+  if(customId==='modal_post_trade'){
+    await interaction.deferReply({ephemeral:true});
+    const offreStr  = interaction.fields.getTextInputValue('trade_offre');
+    const offreVal  = parseInt(interaction.fields.getTextInputValue('trade_offre_val'))||0;
+    const chercheStr= interaction.fields.getTextInputValue('trade_cherche');
+    const chercheValRaw = interaction.fields.getTextInputValue('trade_cherche_val')??'0';
+    const chercheVal = parseInt(chercheValRaw)||0;
+    return postTrade(interaction,interaction.user.id,offreStr,chercheStr,offreVal,chercheVal);
+  }
+
   if(customId==='modal_shop_role_custom'){
     await interaction.deferReply({ephemeral:true});
     const roleName=interaction.fields.getTextInputValue('role_name'),roleColorInput=interaction.fields.getTextInputValue('role_color').trim();
     const user2=db.prepare('SELECT * FROM users WHERE discord_id=?').get(interaction.user.id);
     if(!user2||user2.coins<500)return interaction.editReply('❌ Pas assez de pièces.');
     let colorHex=0x7B2FBE;
-    const isDeg=roleColorInput.toLowerCase().includes('dégradé')||roleColorInput.toLowerCase().includes('degrade');
-    if(!isDeg){const match=roleColorInput.match(/#?([0-9a-fA-F]{6})/);if(match)colorHex=parseInt(match[1],16);}
+    const match=roleColorInput.match(/#?([0-9a-fA-F]{6})/);if(match)colorHex=parseInt(match[1],16);
     try{
       const newRole=await interaction.guild.roles.create({name:roleName,color:colorHex,hoist:false});
       const member=await interaction.guild.members.fetch(interaction.user.id).catch(()=>null);
       if(member)await member.roles.add(newRole).catch(()=>{});
       db.prepare('UPDATE users SET coins=coins-500 WHERE discord_id=?').run(interaction.user.id);
       db.prepare('INSERT INTO shop_purchases (discord_id,item_type,item_data,coins_spent) VALUES (?,?,?,?)').run(interaction.user.id,'custom_role',JSON.stringify({name:roleName,color:roleColorInput}),500);
-      await updateShopCoinLeaderboard(interaction.guild);
-      await interaction.editReply(`✅ Rôle **${roleName}** créé et attribué !${isDeg?' (Dégradé non supporté nativement par Discord, couleur violet utilisée)':''}`);
-    }catch(e){await interaction.editReply(`❌ Erreur lors de la création du rôle : ${e.message}`);}
+      await updateCoinsLeaderboardChannel(interaction.guild);
+      await interaction.editReply(`✅ Rôle **${roleName}** créé et attribué !`);
+    }catch(e){await interaction.editReply(`❌ Erreur : ${e.message}`);}
   }
 }
 
@@ -1172,7 +1307,6 @@ function startYoutubeWatcher(client) {
       }
     }catch(e){console.error('[YouTube]',e.message);}
   });
-  console.log('[YouTube] Watcher actif (5min)');
 }
 
 // ── CLIENT ───────────────────────────────────────────────────
@@ -1186,16 +1320,66 @@ client.on(Events.InteractionCreate,async interaction=>{
   if(interaction.isModalSubmit()){try{await handleModal(interaction);}catch(e){console.error('[MODAL]',e.message);}}
 });
 
-// ── Screenshot listener — VÉRIFICATION MANUELLE v4 ──────────
+// ── SCREENSHOT LISTENER ──────────────────────────────────────
 const msgCooldowns=new Map();
 client.on(Events.MessageCreate,async message=>{
   if(message.author.bot)return;
   const uid=message.author.id,now=Date.now();
+  // ── Coins + XP par message (cooldown 1 min) ──
   if(!msgCooldowns.has(uid)||now-msgCooldowns.get(uid)>=60_000){
     msgCooldowns.set(uid,now);
     db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(uid);
-    db.prepare('UPDATE users SET coins=coins+5 WHERE discord_id=?').run(uid);
+    db.prepare('UPDATE users SET coins=coins+5,xp=xp+1 WHERE discord_id=?').run(uid);
+    // Check XP tier upgrade
+    const u=db.prepare('SELECT xp,vocal_minutes FROM users WHERE discord_id=?').get(uid);
+    try {
+      const member = await message.guild?.members.fetch(uid).catch(()=>null);
+      if (member) await applyXpRoles(message.guild, member, u.xp??0, u.vocal_minutes??0);
+    } catch {}
   }
+
+  // ── Commandes vocaux privés (messages dans vocal texte) ──
+  // On détecte les messages dans des vocaux privés (threads ou salons liés)
+  // On utilise le message comme commande dans n'importe quel salon texte
+  if(message.content.startsWith('!')){
+    const pv = db.prepare('SELECT * FROM private_vocals WHERE owner_id=?').get(uid);
+    if(!pv)return;
+    const pvCh = message.guild?.channels.cache.get(pv.channel_id);
+    if(!pvCh)return;
+    const args = message.content.slice(1).trim().split(/\s+/);
+    const cmd = args[0].toLowerCase();
+
+    if(cmd==='open'){
+      await pvCh.permissionOverwrites.edit(message.guild.id,{Connect:true}).catch(()=>{});
+      await message.reply(`✅ Vocal **${pvCh.name}** ouvert à tout le monde.`);
+    } else if(cmd==='close'){
+      await pvCh.permissionOverwrites.edit(message.guild.id,{Connect:false}).catch(()=>{});
+      await message.reply(`🔒 Vocal **${pvCh.name}** fermé.`);
+    } else if(cmd==='add'){
+      const mention = message.mentions.members?.first();
+      if(!mention)return message.reply('❌ Mentionne un membre. Ex: `!add @user`');
+      await pvCh.permissionOverwrites.edit(mention.id,{Connect:true}).catch(()=>{});
+      await message.reply(`✅ <@${mention.id}> peut rejoindre ton vocal.`);
+    } else if(cmd==='kick'){
+      const mention = message.mentions.members?.first();
+      if(!mention)return message.reply('❌ Mentionne un membre. Ex: `!kick @user`');
+      if(mention.voice.channelId===pv.channel_id){
+        const fallback = message.guild.channels.cache.find(c=>c.type===ChannelType.GuildVoice&&!db.prepare('SELECT * FROM private_vocals WHERE channel_id=?').get(c.id)&&!c.name.toLowerCase().includes('afk')&&!c.name.toLowerCase().includes('sleep'));
+        if(fallback)await mention.voice.setChannel(fallback).catch(()=>{});
+        else await mention.voice.disconnect().catch(()=>{});
+      }
+      await pvCh.permissionOverwrites.delete(mention.id).catch(()=>{});
+      await message.reply(`✅ <@${mention.id}> expulsé de ton vocal.`);
+    } else if(cmd==='rename'){
+      const newName = args.slice(1).join(' ');
+      if(!newName)return message.reply('❌ Donne un nom. Ex: `!rename Mon Vocal`');
+      await pvCh.setName(newName.slice(0,32)).catch(()=>{});
+      await message.reply(`✅ Vocal renommé en **${newName}**.`);
+    }
+    return;
+  }
+
+  // ── Screenshot trade ──
   if(!message.channel.isThread())return;
   const trade=db.prepare('SELECT * FROM trades WHERE thread_id=? AND status=?').get(message.channel.id,'in_progress');
   if(!trade)return;
@@ -1204,20 +1388,13 @@ client.on(Events.MessageCreate,async message=>{
   if(![trade.poster_id,trade.accepter_id].includes(uid))return;
   if(trade.screenshot_verified===1)return;
 
-  // ── VÉRIFICATION MANUELLE — ping staff ──
   db.prepare('UPDATE trades SET screenshot_url=? WHERE id=?').run(attachment.url,trade.id);
-
-  // Trouver le salon middleman-panel pour notifier le staff
   const guild=message.guild;
   const mmPanel=guild?.channels.cache.find(c=>c.name.includes('middleman-panel'));
   const staffRoles=['👑 Owner','⚡ Admin','🛡️ Modérateur','🤝 Middleman'];
   const staffMentions=staffRoles.map(rn=>guild?.roles.cache.find(r=>r.name===rn)).filter(Boolean).map(r=>`<@&${r.id}>`).join(' ');
 
-  await message.channel.send([
-    `📸 **Screenshot reçu de <@${uid}>**`,
-    '','⏳ En attente de validation par le **staff**...',
-    '_Un membre du staff va vérifier et valider ce trade._'
-  ].join('\n'));
+  await message.channel.send([`📸 **Screenshot reçu de <@${uid}>**`,'','⏳ En attente de validation par le **staff**...'].join('\n'));
 
   if(mmPanel){
     const poster=db.prepare('SELECT * FROM users WHERE discord_id=?').get(trade.poster_id);
@@ -1239,30 +1416,134 @@ client.on(Events.MessageCreate,async message=>{
   }
 });
 
-client.on(Events.VoiceStateUpdate,(old,neu)=>{
-  const uid=neu.id;
-  if(!old.channelId&&neu.channelId)db.prepare(`INSERT OR REPLACE INTO vocal_sessions (discord_id,joined_at) VALUES (?,strftime('%s','now'))`).run(uid);
-  if(old.channelId&&!neu.channelId){const s=db.prepare('SELECT * FROM vocal_sessions WHERE discord_id=?').get(uid);if(!s)return;const min=Math.floor((Math.floor(Date.now()/1000)-s.joined_at)/60);if(min>0)db.prepare('UPDATE users SET vocal_minutes=vocal_minutes+?,coins=coins+? WHERE discord_id=?').run(min,min,uid);db.prepare('DELETE FROM vocal_sessions WHERE discord_id=?').run(uid);}
+// ── VOICE STATE UPDATE ───────────────────────────────────────
+client.on(Events.VoiceStateUpdate,async(old,neu)=>{
+  const uid=neu.id||old.id;
+  const guild = neu.guild || old.guild;
+
+  // ── Rejoindre ──
+  if(!old.channelId&&neu.channelId){
+    if(!isIdleChannel(neu.channel)){
+      db.prepare(`INSERT OR REPLACE INTO vocal_sessions (discord_id,joined_at) VALUES (?,strftime('%s','now'))`).run(uid);
+    }
+    // Auto-delete empty private vocals
+  }
+
+  // ── Partir ──
+  if(old.channelId&&!neu.channelId){
+    if(!isIdleChannel(old.channel)){
+      const s=db.prepare('SELECT * FROM vocal_sessions WHERE discord_id=?').get(uid);
+      if(s){
+        const min=Math.floor((Math.floor(Date.now()/1000)-s.joined_at)/60);
+        if(min>0){
+          db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(uid);
+          db.prepare('UPDATE users SET vocal_minutes=vocal_minutes+?,coins=coins+? WHERE discord_id=?').run(min,min,uid);
+          // XP vocal upgrade check
+          const u=db.prepare('SELECT xp,vocal_minutes FROM users WHERE discord_id=?').get(uid);
+          try{const member=await guild?.members.fetch(uid).catch(()=>null);if(member)await applyXpRoles(guild,member,u.xp??0,u.vocal_minutes??0);}catch{}
+        }
+        db.prepare('DELETE FROM vocal_sessions WHERE discord_id=?').run(uid);
+      }
+    }
+
+    // ── Supprimer vocal privé vide ──
+    if(old.channel){
+      const pv=db.prepare('SELECT * FROM private_vocals WHERE channel_id=?').get(old.channelId);
+      if(pv&&old.channel.members.size===0){
+        db.prepare('DELETE FROM private_vocals WHERE channel_id=?').run(old.channelId);
+        await old.channel.delete('Vocal privé vide').catch(()=>{});
+      }
+    }
+  }
+
+  // ── Changer de salon ──
+  if(old.channelId&&neu.channelId&&old.channelId!==neu.channelId){
+    // Quitter l'ancien
+    if(!isIdleChannel(old.channel)){
+      const s=db.prepare('SELECT * FROM vocal_sessions WHERE discord_id=?').get(uid);
+      if(s){const min=Math.floor((Math.floor(Date.now()/1000)-s.joined_at)/60);if(min>0){db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(uid);db.prepare('UPDATE users SET vocal_minutes=vocal_minutes+?,coins=coins+? WHERE discord_id=?').run(min,min,uid);}}
+    }
+    db.prepare('DELETE FROM vocal_sessions WHERE discord_id=?').run(uid);
+    // Rejoindre le nouveau
+    if(!isIdleChannel(neu.channel)){
+      db.prepare(`INSERT OR REPLACE INTO vocal_sessions (discord_id,joined_at) VALUES (?,strftime('%s','now'))`).run(uid);
+    }
+    // Supprimer l'ancien vocal privé si vide
+    if(old.channel){
+      const pv=db.prepare('SELECT * FROM private_vocals WHERE channel_id=?').get(old.channelId);
+      if(pv&&old.channel.members.size===0){
+        db.prepare('DELETE FROM private_vocals WHERE channel_id=?').run(old.channelId);
+        await old.channel.delete('Vocal privé vide').catch(()=>{});
+      }
+    }
+  }
 });
 
+// ── MEMBER JOIN ──────────────────────────────────────────────
 client.on(Events.GuildMemberAdd,async member=>{
-  try{const nonv=member.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');if(nonv)await member.roles.add(nonv);console.log(`[MemberAdd] ${member.user.tag} → 🔒 Non Vérifié`);}catch(e){console.error('[MemberAdd]',e.message);}
+  try{
+    const nonv=member.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');
+    if(nonv)await member.roles.add(nonv);
+
+    // ── EMBED BIENVENUE ──
+    const welcomeCh = member.guild.channels.cache.find(c=>c.name.includes('bienvenue'));
+    if(welcomeCh){
+      let avatarUrl = member.user.displayAvatarURL({size:256,extension:'png'});
+      const embed = new EmbedBuilder()
+        .setColor(C.primary)
+        .setTitle(`👋 Bienvenue sur le serveur, **${member.displayName}** !`)
+        .setDescription([
+          `> Salut <@${member.id}> ! Bienvenue sur **${member.guild.name}** 🎉`,
+          '',
+          '**🔑 Pour accéder au serveur :**',
+          '→ Va dans le salon **vérification** et lie ton compte Roblox',
+          '',
+          '**💬 Tu es membre n°**' + member.guild.memberCount,
+        ].join('\n'))
+        .setThumbnail(avatarUrl)
+        .setFooter({text:`${member.guild.name} • Wenzy Bot v5`})
+        .setTimestamp();
+      await welcomeCh.send({embeds:[embed]});
+    }
+    console.log(`[MemberAdd] ${member.user.tag}`);
+  }catch(e){console.error('[MemberAdd]',e.message);}
+});
+
+// ── CHANNEL DELETE — cleanup vocaux privés ───────────────────
+client.on(Events.ChannelDelete,ch=>{
+  db.prepare('DELETE FROM private_vocals WHERE channel_id=?').run(ch.id);
 });
 
 client.once(Events.ClientReady,async()=>{
-  console.log(`✅ Wenzy Bot v4 : ${client.user.tag}`);
+  console.log(`✅ Wenzy Bot v5 : ${client.user.tag}`);
   client.user.setActivity('MM2 Trades 🗡️',{type:3});
   const rest=new REST({version:'10'}).setToken(process.env.DISCORD_TOKEN);
   try{const body=commands.map(c=>c.data.toJSON());await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID,process.env.GUILD_ID),{body});console.log(`✅ ${body.length} commandes déployées`);}catch(e){console.error('❌ Deploy:',e);}
   startYoutubeWatcher(client);
   await fetchMM2Values();
-  cron.schedule('0 * * * *',fetchMM2Values);
-  cron.schedule('0 0 * * *',async()=>{for(const[,gld]of client.guilds.cache){await updateLeaderboardChannel(gld);await updateShopCoinLeaderboard(gld);}console.log('[Cron] Leaderboard mis à jour');});
-  // Check giveaways restants au démarrage
+
+  // ── CRONS ──
+  cron.schedule('0 * * * *', fetchMM2Values); // Values MM2 toutes les heures
+  cron.schedule('*/10 * * * *', async()=>{ // Classement pièces toutes les 10 min
+    for(const[,gld]of client.guilds.cache){ await updateCoinsLeaderboardChannel(gld); }
+  });
+  cron.schedule('0 0 * * *', async()=>{ // Leaderboard trades toutes les 24h
+    for(const[,gld]of client.guilds.cache){ await updateLeaderboardChannel(gld); await updateCoinsLeaderboardChannel(gld); }
+    console.log('[Cron] Leaderboards mis à jour');
+  });
+
+  // ── RESTORE RÔLES AU BOOT ──
+  for(const[,gld]of client.guilds.cache){
+    await gld.members.fetch().catch(()=>{}); // Fetch all members into cache
+    await restoreAllRoles(gld);
+    await updateCoinsLeaderboardChannel(gld);
+  }
+
+  // ── REPRENDRE GIVEAWAYS ──
   const activeGiveaways=db.prepare('SELECT * FROM giveaways WHERE status=?').all('active');
   for(const gw of activeGiveaways){const remaining=(gw.ends_at*1000)-Date.now();if(remaining>0)setTimeout(()=>endGiveaway(client,gw.id),remaining);else await endGiveaway(client,gw.id);}
   console.log(`[Giveaways] ${activeGiveaways.length} giveaway(s) repris`);
-  console.log('[Crons] Values 1h + Leaderboard 24h actifs');
+  console.log('[Wenzy Bot v5] Prêt. 6767');
 });
 
 client.login(process.env.DISCORD_TOKEN);
