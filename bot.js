@@ -769,14 +769,14 @@ const commands = [
       .setName('report')
       .setDescription('🚨 Reporter un scam ou comportement suspect')
       .addUserOption(o => o.setName('membre').setDescription('Membre à reporter').setRequired(true))
-      .addIntegerOption(o => o.setName('trade').setDescription('ID du trade concerné'))
-      .addStringOption(o => o.setName('raison').setDescription('Raison').setRequired(true)),
+      .addStringOption(o => o.setName('raison').setDescription('Raison').setRequired(true))
+      .addIntegerOption(o => o.setName('trade').setDescription('ID du trade concerné (optionnel)')),
 
     async execute(interaction) {
       await interaction.deferReply({ ephemeral: true });
       const reported = interaction.options.getUser('membre');
-      const tradeId  = interaction.options.getInteger('trade');
       const reason   = interaction.options.getString('raison');
+      const tradeId  = interaction.options.getInteger('trade');
       db.prepare(`INSERT INTO reports (reporter_id,reported_id,trade_id,reason) VALUES (?,?,?,?)`).run(interaction.user.id, reported.id, tradeId ?? null, reason);
       db.prepare('UPDATE users SET report_count=report_count+1 WHERE discord_id=?').run(reported.id);
       const logsCh = interaction.guild.channels.cache.find(c => c.name.includes('logs'));
