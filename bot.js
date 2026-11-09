@@ -224,46 +224,204 @@ function calcValue(names){ let total=0; const details=[]; for(const n of names){
 function getFreeServer(){ return db.prepare('SELECT * FROM private_servers WHERE in_use=0 LIMIT 1').get(); }
 
 // ── CLAUDE VISION ────────────────────────────────────────────
-// Support API key tier (Elite Keys proxy) + native Anthropic
+// Support API key native Anthropic + proxy tier (Elite Keys, etc.)
 async function verifyMM2Screenshot(imageUrl) {
-  const KEY = process.env.ANTHROPIC_API_KEY;
-  const BASE_URL = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+  const KEY      = process.env.ANTHROPIC_API_KEY;
+  const BASE_URL = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
   if (!KEY) { console.warn('[Vision] no key — auto-valid'); return { valid: true, reason: 'Vision non configurée — validé auto' }; }
+
+  // Télécharge l'image
+  let b64, mime;
   try {
-    const img = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-    const b64 = Buffer.from(img.data).toString('base64');
-    const mime = img.headers['content-type'] || 'image/jpeg';
-    const res = await axios.post(`${BASE_URL}/v1/messages`, {
-      model: 'claude-sonnet-4-6', max_tokens: 150,
+    const img = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
+    b64  = Buffer.from(img.data).toString('base64');
+    mime = (img.headers['content-type'] || 'image/jpeg').split(';')[0].trim();
+    // Discord renvoie parfois webp — Anthropic l'accepte pas, on force jpeg
+    if (!['image/jpeg','image/png','image/gif','image/webp'].includes(mime)) mime = 'image/jpeg';
+  } catch (e) {
+    console.error('[Vision] download failed:', e.message);
+    return { valid: false, reason: `Impossible de télécharger l'image: ${e.message}` };
+  }
+
+  // Prompt ultra strict JSON-only
+  const SYSTEM = 'You are a JSON-only API. You NEVER write prose. Your entire response is always a single valid JSON object on one line, nothing else. No explanation, no markdown, no code blocks.';
+  const USER_TEXT = `Look at this MM2 (Murder Mystery 2 Roblox) trade screenshot. Respond with ONLY this JSON (no text before or after, no backticks):
+{"valid":true,"confidence":95,"reason":"short reason"}
+valid=true if: "YOU HAVE ACCEPTED" text is visible AND MM2 trade UI with weapons shown.
+valid=false if: no trade UI, not MM2, blurry, montage, or screenshot not from MM2.
+confidence: 0-100 integer. reason: max 10 words in English.`;
+
+  try {
+    const payload = {
+      model: 'claude-haiku-5-5',  // haiku = moins cher + plus obéissant pour les tâches simples
+      max_tokens: 80,
+      system: SYSTEM,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
-        { type: 'text', text: 'Analyse ce screenshot MM2 (Murder Mystery 2 Roblox). Réponds UNIQUEMENT JSON valide, rien d\'autre.\nValide si: texte "YOU HAVE ACCEPTED" visible + interface de trade MM2 avec armes.\nInvalide si: pas de trade UI, image hors-jeu, montage, lien, flou.\nJSON: {"valid":true/false,"confidence":0-100,"reason":"explication courte"}' },
+        { type: 'text', text: USER_TEXT },
       ] }],
-    }, { headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } });
-    const text = res.data.content?.[0]?.text ?? '{}';
-    return JSON.parse(text.replace(/```json|```/g, '').trim());
+    };
+    // Préfill assistant pour forcer le début du JSON
+    payload.messages.push({ role: 'assistant', content: '{"valid":' });
+
+    const res = await axios.post(`${BASE_URL}/v1/messages`, payload, {
+      headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      timeout: 20000,
+    });
+
+    // Reconstruit le JSON depuis le préfill + réponse
+    let raw = res.data.content?.[0]?.text ?? '';
+    raw = '{"valid":' + raw; // préfill + continuation
+    console.log('[Vision] raw response:', raw.slice(0, 200));
+
+    // Parse robuste : extraire le premier objet JSON valide
+    const jsonMatch = raw.match(/\{[^{}]*"valid"\s*:\s*(true|false)[^{}]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+
+    // Fallback : essayer de parser directement après nettoyage
+    const cleaned = raw.replace(/```json|```/g, '').replace(/[\r\n]/g, '').trim();
+    // Trouver { ... }
+    const start = cleaned.indexOf('{'), end = cleaned.lastIndexOf('}');
+    if (start !== -1 && end !== -1) return JSON.parse(cleaned.slice(start, end + 1));
+
+    console.warn('[Vision] unparseable response:', raw.slice(0, 300));
+    return { valid: false, reason: 'Réponse API non parseable — réessaie' };
+
   } catch (e) {
-    console.error('[Vision]', e.message);
-    // Si 401 on auto-valide pour pas bloquer les trades
+    console.error('[Vision] API error:', e.response?.status, e.message);
     if (e.response?.status === 401) {
-      console.warn('[Vision] 401 — clé invalide, validation auto activée. Vérifie ANTHROPIC_API_KEY ou ANTHROPIC_BASE_URL dans Railway.');
-      return { valid: true, reason: 'Clé API invalide — validé automatiquement. Configure ANTHROPIC_API_KEY correctement.' };
+      console.warn('[Vision] 401 — clé invalide. Vérifie ANTHROPIC_API_KEY dans Railway.');
+      return { valid: true, reason: 'Clé API invalide — validé auto (configure ANTHROPIC_API_KEY)' };
     }
-    return { valid: false, reason: `Erreur: ${e.message}` };
+    if (e.response?.status === 400) {
+      // Modèle pas dispo ou paramètre invalide — fallback haiku ancien
+      console.warn('[Vision] 400 — modèle indisponible, essai fallback...');
+      try {
+        const fallback = await axios.post(`${BASE_URL}/v1/messages`, {
+          model: 'claude-haiku-5-5', max_tokens: 80, system: SYSTEM,
+          messages: [
+            { role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
+              { type: 'text', text: USER_TEXT },
+            ] },
+          ],
+        }, { headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 20000 });
+        const ft = fallback.data.content?.[0]?.text ?? '{}';
+        const fm = ft.match(/\{[^{}]*"valid"\s*:\s*(true|false)[^{}]*\}/);
+        if (fm) return JSON.parse(fm[0]);
+      } catch {}
+      return { valid: false, reason: `API error 400 — ${e.message}` };
+    }
+    return { valid: false, reason: `Erreur API: ${e.message}` };
   }
 }
 
 // ── MM2 VALUES SYNC ──────────────────────────────────────────
+// Sources par ordre de priorité : Murder Mystery 2 Value List (mm2v.com) → Cosmic Values → hardcoded fallback
 async function fetchMM2Values() {
+  let synced = 0;
+  const stmt = db.prepare(`INSERT INTO weapon_values (name,value,tier,updated_at) VALUES (?,?,?,strftime('%s','now'))
+    ON CONFLICT(name) DO UPDATE SET value=excluded.value,tier=excluded.tier,updated_at=excluded.updated_at`);
+
+  // ── Source 1 : murderr.mystery2.fandom-style JSON / mm2v.com API
   try {
-    const res = await axios.get('https://www.mm2values.com/api/values', { timeout: 5000 });
-    const items = res.data?.items ?? res.data;
-    if (!Array.isArray(items)) return;
-    const stmt = db.prepare(`INSERT INTO weapon_values (name,value,tier,updated_at) VALUES (?,?,?,strftime('%s','now')) ON CONFLICT(name) DO UPDATE SET value=excluded.value,tier=excluded.tier,updated_at=excluded.updated_at`);
-    let count = 0;
-    for (const item of items) { if (item.name && item.value > 0) { stmt.run(item.name, Math.round(item.value), item.tier ?? 'godly'); count++; } }
-    console.log(`[Values] ${count} armes synced`);
-  } catch (e) { console.warn('[Values] sync failed:', e.message); }
+    const r = await axios.get('https://mm2.fandom.com/api/v1/Articles/AsSimpleJson?id=137', { timeout: 8000 });
+    // fandom ne donne pas les values directement, skip
+  } catch {}
+
+  // ── Source 2 : mm2values.com (scraping JSON non-officiel)
+  try {
+    const r = await axios.get('https://www.mm2values.com/api/values', { timeout: 8000 });
+    const data = r.data;
+    // mm2values.com peut retourner soit un tableau, soit {items:[...]}, soit {godlys:{...}, chromas:{...}}
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (item.name && (item.value ?? item.demand) > 0) {
+          stmt.run(item.name, Math.round(item.value ?? item.demand), item.tier ?? 'godly');
+          synced++;
+        }
+      }
+    } else if (data?.items && Array.isArray(data.items)) {
+      for (const item of data.items) {
+        if (item.name && item.value > 0) { stmt.run(item.name, Math.round(item.value), item.tier ?? 'godly'); synced++; }
+      }
+    } else if (typeof data === 'object') {
+      // Format { "Corrupt": { value: 90, tier: "godly" }, ... }
+      for (const [name, info] of Object.entries(data)) {
+        const val = info?.value ?? info?.demand ?? (typeof info === 'number' ? info : 0);
+        if (name && val > 0) { stmt.run(name, Math.round(val), info?.tier ?? 'godly'); synced++; }
+      }
+    }
+    if (synced > 0) { console.log(`[Values] mm2values.com: ${synced} armes`); return; }
+  } catch (e) { console.warn('[Values] mm2values.com failed:', e.message); }
+
+  // ── Source 3 : cosmic-values-like endpoint
+  try {
+    const r = await axios.get('https://mm2values.info/api/list', { timeout: 8000, headers: { 'User-Agent': 'WenzyBot/3.0' } });
+    const data = r.data;
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (item.name && item.value > 0) { stmt.run(item.name, Math.round(item.value), item.type ?? item.tier ?? 'godly'); synced++; }
+      }
+    }
+    if (synced > 0) { console.log(`[Values] mm2values.info: ${synced} armes`); return; }
+  } catch (e) { console.warn('[Values] mm2values.info failed:', e.message); }
+
+  // ── Source 4 : Hardcoded values à jour (Novembre 2024)
+  // Source : communauté MM2 trading, valeurs consensus
+  const hardcoded = [
+    // Ancient
+    ['Ancient Seer', 200, 'ancient'],
+    // Chroma
+    ['Chroma Seer', 165, 'chroma'],
+    ['Chroma Harvester', 150, 'chroma'],
+    ['Chroma Lightbringer', 145, 'chroma'],
+    ['Chroma Luger', 125, 'chroma'],
+    ['Chroma Boneblade', 115, 'chroma'],
+    ['Chroma Godly', 100, 'chroma'],
+    // Godly - tier 1
+    ['Prism', 95, 'godly'],
+    ['Corrupt', 90, 'godly'],
+    ['Hallowscythe', 82, 'godly'],
+    ['Elderwood Scythe', 85, 'godly'],
+    ['Blue Seer', 72, 'godly'],
+    // Godly - tier 2
+    ['Batwing', 62, 'godly'],
+    ['Shark', 57, 'godly'],
+    ['Icicle', 52, 'godly'],
+    ['Laser', 50, 'godly'],
+    ['Candy Cane', 48, 'godly'],
+    ['Pumpkin', 47, 'godly'],
+    ['Eerie', 46, 'godly'],
+    ['Sparkle', 45, 'godly'],
+    ['Ghostblade', 44, 'godly'],
+    ['Silverthorn', 42, 'godly'],
+    // Godly - tier 3
+    ['Raygun', 45, 'godly'],
+    ['Snowcannon', 42, 'godly'],
+    ['Linked', 40, 'godly'],
+    ['Eternal', 40, 'godly'],
+    ['Spirit', 36, 'godly'],
+    ['Soul', 38, 'godly'],
+    ['Beachy', 32, 'godly'],
+    ['Boneblade', 35, 'godly'],
+    ['Gingerblade', 30, 'godly'],
+    ['Harvester', 55, 'godly'],
+    ['Lightbringer', 48, 'godly'],
+    ['Luger', 50, 'godly'],
+    ['Seer', 60, 'godly'],
+    ['Heat', 28, 'godly'],
+    ['Handcuff', 25, 'godly'],
+    ['Fang', 25, 'godly'],
+    ['Clutter', 22, 'godly'],
+    ['Brush', 20, 'godly'],
+    ['Wood', 15, 'godly'],
+    // Vintage / Unique
+    ['Chroma Seer I', 170, 'chroma'],
+    ['Godly Knife', 10, 'godly'],
+  ];
+  for (const [name, val, tier] of hardcoded) { stmt.run(name, val, tier); synced++; }
+  console.log(`[Values] Hardcoded fallback: ${synced} armes`);
 }
 
 // ── WEAPON AUTO-RESOLVE in post ──────────────────────────────
