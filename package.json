@@ -1,6 +1,6 @@
 {
   "name": "wenzy-bot",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "Wenzy MM2 Trading Discord Bot — single file",
   "main": "bot.js",
   "scripts": {
