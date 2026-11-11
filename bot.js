@@ -1197,9 +1197,7 @@ async function doVerify(interaction) {
   try {
     const g = interaction.guild;
     const membresRole = g.roles.cache.find(r=>r.name==='Membres');
-    const nonvRole = g.roles.cache.find(r=>r.name==='🔒 Non Vérifié');
     const debutantRole = g.roles.cache.find(r=>r.name==='5 - Débutants');
-    if (nonvRole) await interaction.member.roles.remove(nonvRole).catch(()=>{});
     if (membresRole) await interaction.member.roles.add(membresRole).catch(()=>{});
     if (debutantRole) await interaction.member.roles.add(debutantRole).catch(()=>{});
   } catch {}
@@ -1565,7 +1563,6 @@ const commands = [
         { name:'+18',                 color:0xFF4500, hoist:false, perms:[] },
         { name:'-18',                 color:0x2ECC71, hoist:false, perms:[] },
         { name:'🔇 Muet',             color:0x2C2F33, hoist:false, perms:[] },
-        { name:'🔒 Non Vérifié',      color:0x2C2F33, hoist:false, perms:[] },
         { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
       ];
 
@@ -1580,7 +1577,6 @@ const commands = [
 
       const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
       const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]).filter(Boolean);
-      const nonv = cr['🔒 Non Vérifié'];
       const everyone = guild.id;
 
       const catDefs = [
@@ -1721,7 +1717,6 @@ const commands = [
       for(const cd of catDefs){
         const catPow = [
           {id:everyone,allow:[PermissionFlagsBits.ViewChannel]},
-          ...(nonv?[{id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]}]:[]),
         ];
         const cat = await guild.channels.create({name:cd.name,type:ChannelType.GuildCategory,permissionOverwrites:catPow});
         log.push(`📁 ${cd.name}`);
@@ -1733,13 +1728,11 @@ const commands = [
             for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]});
           } else if(ch.readonly||ch.ticketEmbed||ch.welcomeEmbed||ch.gameEmbed){
             cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]});
-            if(nonv)cpows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
             for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.SendMessages]});
           } else if(ch.voice||ch.createPv){
             // vocal
           } else {
             cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel]});
-            if(nonv)cpows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
           }
           cm[ch.name] = await guild.channels.create({
             name:ch.name,
@@ -2103,6 +2096,251 @@ const commands = [
             .setFooter({text:'Wenzy Bot v7.5  •  Giveaways'})],
         });
         log.push('✅ Embed giveaways');
+      }
+
+      // ── EMBED ANNONCES ──
+      const announceCh = cm['📢┃annonces'];
+      if(announceCh){
+        await announceCh.send({
+          embeds:[new EmbedBuilder().setColor(C.info)
+            .setAuthor({name:`📢 Annonces — ${guild.name}`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> Les annonces importantes du serveur apparaissent ici.',
+              '',
+              '**📋 Types d\'annonces :**',
+              '┣ 🛠️ Mises à jour du serveur',
+              '┣ 🎉 Événements et giveaways',
+              '┣ 🗡️ Nouvelles règles MM2',
+              '┗ 📢 Informations importantes',
+              '',
+              '> Active les notifications 🔔 pour ne rien manquer !',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed annonces');
+      }
+
+      // ── EMBED BOOSTS ──
+      const boostsCh = cm['🚀┃boosts'];
+      if(boostsCh){
+        await boostsCh.send({
+          embeds:[new EmbedBuilder().setColor(C.pink)
+            .setAuthor({name:`🚀 Boosteurs — ${guild.name}`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> **Merci à tous ceux qui boostent le serveur !** 💜',
+              '',
+              '**🎁 Avantages des boosteurs :**',
+              '┣ 🏷️ Rôle **Boosteurs** exclusif',
+              '┣ 🪙 **+500 pièces** offerts',
+              '┣ ✨ **+200 XP** bonus',
+              '┗ 💬 Accès à des salons spéciaux',
+              '',
+              '> Booste le serveur pour soutenir la communauté !',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed boosts');
+      }
+
+      // ── EMBED RÉSEAUX ──
+      const reseauxCh = cm['🌐┃réseaux'];
+      if(reseauxCh){
+        await reseauxCh.send({
+          embeds:[new EmbedBuilder().setColor(C.blurple)
+            .setAuthor({name:`🌐 Réseaux — ${guild.name}`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> **Retrouve Wenzy sur toutes les plateformes !**',
+              '',
+              '**📱 Liens officiels :**',
+              '┣ ▶️ **YouTube** — Vidéos MM2 & Gaming',
+              '┣ 🎵 **TikTok** — Clips & highlights',
+              '┣ 📸 **Instagram** — Photos & stories',
+              '┗ 🎮 **Roblox** — Profil officiel',
+              '',
+              '> Suis tous les réseaux pour soutenir Wenzy !',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed réseaux');
+      }
+
+      // ── EMBED PARTENARIAT ──
+      const partCh = cm['🤝┃partenariat'];
+      if(partCh){
+        await partCh.send({
+          embeds:[new EmbedBuilder().setColor(C.teal)
+            .setAuthor({name:`🤝 Partenariats — ${guild.name}`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> **Tu souhaites nouer un partenariat avec notre serveur ?**',
+              '',
+              '**📋 Conditions :**',
+              '┣ ✅ Serveur actif avec **+100 membres**',
+              '┣ ✅ Contenu en rapport avec MM2 / Gaming',
+              '┣ ✅ Modération active et règlement clair',
+              '┗ ✅ Pas de contenu NSFW ni toxique',
+              '',
+              '**📩 Pour postuler :**',
+              '→ Ouvre un ticket dans **🎫┃ticket** catégorie **Candidature**',
+              '→ Présente ton serveur + lien d\'invitation',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed partenariat');
+      }
+
+      // ── EMBED FAQ ──
+      const faqCh = cm['❓┃faq'];
+      if(faqCh){
+        await faqCh.send({
+          embeds:[new EmbedBuilder().setColor(C.warning)
+            .setAuthor({name:`❓ FAQ — Foire Aux Questions`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '**Q : Comment je commence à trader ?**',
+              '→ Lie ton compte Roblox dans **🔗┃lier-roblox**, puis poste dans **📬┃poster-un-trade**.',
+              '',
+              '**Q : C\'est quoi un Middleman ?**',
+              '→ Un staff de confiance qui supervise les gros trades pour éviter les scams.',
+              '',
+              '**Q : J\'ai été scammé, que faire ?**',
+              '→ Ouvre un ticket **💀 Scam** dans **🎫┃ticket** avec des preuves.',
+              '',
+              '**Q : Comment gagner des pièces ?**',
+              '→ `/daily`, `/work`, trader, participer aux giveaways.',
+              '',
+              '**Q : C\'est quoi le système XP ?**',
+              '→ Tu gagnes de l\'XP en chattant, en vocal et en tradant. Ça débloque des rôles.',
+              '',
+              '**Q : Comment rejoindre le staff ?**',
+              '→ Ouvre un ticket **📋 Candidature** dans **🎫┃ticket**.',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed FAQ');
+      }
+
+      // ── EMBED 1VS1 ──
+      const unVsUnCh = cm['⚔️┃1vs1'];
+      if(unVsUnCh){
+        await unVsUnCh.send({
+          embeds:[new EmbedBuilder().setColor(C.danger)
+            .setAuthor({name:'⚔️ 1vs1 MM2 — Défis'})
+            .setDescription([
+              '> **Lance un défi à n\'importe quel membre ici !**',
+              '',
+              '**🎮 Comment défier ?**',
+              '→ `/duel @membre <mise>` pour un duel de pièces',
+              '→ Poste ton défi en message avec ton profil',
+              '',
+              '**📋 Règles :**',
+              '┣ ✅ Accord mutuel obligatoire',
+              '┣ ✅ Screenshot du résultat dans **🏆┃vouches**',
+              '┗ ❌ Pas de rage-quit, pas d\'excuses',
+              '',
+              '> Que le meilleur gagne ! 🏆',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed 1vs1');
+      }
+
+      // ── EMBED PRICE-CHECK ──
+      const priceCh = cm['💰┃price-check'];
+      if(priceCh){
+        await priceCh.send({
+          embeds:[new EmbedBuilder().setColor(C.gold)
+            .setAuthor({name:'💰 Price Check — Valeurs MM2'})
+            .setDescription([
+              '> **Vérifie la valeur de n\'importe quelle arme MM2 ici.**',
+              '',
+              '**🔎 Comment vérifier ?**',
+              '→ `/trade check <offre> <recois>` pour comparer deux offres',
+              '→ Poste ton arme en message pour avis communauté',
+              '',
+              '**💡 Conseils :**',
+              '┣ Les valeurs sont mises à jour automatiquement',
+              '┣ Un trade équitable = différence de moins de 20 val',
+              '┗ Toujours vérifier avant d\'accepter un trade !',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed price-check');
+      }
+
+      // ── EMBED CANDIDATURES ──
+      const candidCh = cm['📋┃candidatures'];
+      if(candidCh){
+        await candidCh.send({
+          embeds:[new EmbedBuilder().setColor(C.purple)
+            .setAuthor({name:'📋 Candidatures Staff — Wenzy MM2',iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> **Tu veux rejoindre l\'équipe staff ? Lis ça.**',
+              '',
+              '**✅ Prérequis :**',
+              '┣ 📅 Être membre actif depuis **+2 semaines**',
+              '┣ 🗡️ Au moins **10 trades** complétés',
+              '┣ 🔇 Aucun warn actif',
+              '┣ 🎙️ Disponible régulièrement',
+              '┗ 🧠 Calme, mature et sérieux',
+              '',
+              '**📩 Postuler :**',
+              '→ Ouvre un ticket **📋 Candidature** dans **🎫┃ticket**',
+              '→ Présente-toi, ton expérience, tes disponibilités',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed candidatures');
+      }
+
+      // ── EMBED PLAYGROUND / JEUX ──
+      const playgroundCh = cm['🎢┃playground'];
+      if(playgroundCh){
+        await playgroundCh.send({
+          embeds:[new EmbedBuilder().setColor(C.teal)
+            .setAuthor({name:'🎢 Playground — Zone Fun'})
+            .setDescription([
+              '> **Bienvenue dans la zone fun !** Amuse-toi sans prise de tête.',
+              '',
+              '**🎮 Ce que tu peux faire ici :**',
+              '┣ 🪙 `/coinflip <mise>` — Pile ou face',
+              '┣ ⚔️ `/duel @membre <mise>` — Défi',
+              '┣ 🎁 Participer aux mini-jeux du bot',
+              '┗ 💬 Discuter librement',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed playground');
+      }
+
+      const jeuxCh = cm['🎲┃jeux'];
+      if(jeuxCh){
+        await jeuxCh.send({
+          embeds:[new EmbedBuilder().setColor(C.gold)
+            .setAuthor({name:'🎲 Jeux & Économie'})
+            .setDescription([
+              '> **Dépense tes pièces, tente ta chance !**',
+              '',
+              '**🎮 Commandes :**',
+              '┣ 🪙 `/coinflip <mise>` — Mise entre 10 et 1000 pièces',
+              '┣ ⚔️ `/duel @membre <mise>` — Duel direct',
+              '┣ 🛒 `/shop` — Dépenser ses pièces en boutique',
+              '┣ 📊 `/leaderboard coins` — Classement richesse',
+              '┗ 💰 `/daily` / `/work` — Gagner des pièces',
+              '',
+              '> Bonne chance ! 🍀',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed jeux');
       }
 
       await updateLeaderboards(guild);
@@ -2635,7 +2873,6 @@ const commands = [
       const ex = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
       if(ex) db.prepare('UPDATE users SET roblox_id=?,roblox_username=?,verify_code=?,verified=0 WHERE discord_id=?').run(String(rb.id),rb.name,code,did);
       else db.prepare('INSERT INTO users (discord_id,roblox_id,roblox_username,verify_code) VALUES (?,?,?,?)').run(did,String(rb.id),rb.name,code);
-      try{const nv=interaction.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');if(nv&&!interaction.member.roles.cache.has(nv.id))await interaction.member.roles.add(nv);}catch{}
       await interaction.editReply({
         embeds:[new EmbedBuilder().setColor(C.info)
           .setAuthor({name:'🔗 Vérification — Étape 1/2'})
@@ -3539,7 +3776,6 @@ async function handleModal(interaction) {
     const ex=db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
     if(ex)db.prepare('UPDATE users SET roblox_id=?,roblox_username=?,verify_code=?,verified=0 WHERE discord_id=?').run(String(rb.id),rb.name,code,did);
     else db.prepare('INSERT INTO users (discord_id,roblox_id,roblox_username,verify_code) VALUES (?,?,?,?)').run(did,String(rb.id),rb.name,code);
-    try{const nv=interaction.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');if(nv&&!interaction.member.roles.cache.has(nv.id))await interaction.member.roles.add(nv);}catch{}
     await interaction.editReply({
       embeds:[new EmbedBuilder().setColor(C.info).setAuthor({name:'🔗 Code généré !'}).setDescription([`Compte : **${rb.name}**`,'','**Code à coller dans ta bio Roblox :**',`\`\`\`${code}\`\`\``,'→ [Modifier ta bio](https://www.roblox.com/my/account#!/info)','','Reviens et clique Vérifier.'].join('\n'))],
       components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_verify_now').setLabel('✅ Vérifier maintenant').setStyle(ButtonStyle.Success))],
@@ -3759,13 +3995,11 @@ client.on(Events.VoiceStateUpdate, async(old,neu)=>{
 // ── MEMBER JOIN ──────────────────────────────────────────────
 client.on(Events.GuildMemberAdd, async member=>{
   try{
-    const nonv=member.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');
-    if (nonv) await member.roles.add(nonv);
     const cfg=getConfig(member.guild.id);
     if (cfg?.welcome_enabled!==0) {
       const welcomeCh=cfg?.welcome_channel
         ?member.guild.channels.cache.get(cfg.welcome_channel)
-        :member.guild.channels.cache.find(c=>c.name.includes('chat')||c.name.includes('général'));
+        :member.guild.channels.cache.find(c=>c.name.includes('bienvenue')||c.name.includes('welcome'));
       if (welcomeCh) await welcomeCh.send({embeds:[welcomeEmbed(member,member.guild)]});
     }
     await handleAntiRaid(member.guild,member);
