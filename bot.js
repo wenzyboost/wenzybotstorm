@@ -54,93 +54,390 @@ try {
 async function buildLevelUpImage(discordUser, oldTier, newTier, xp) {
   if (!createCanvas) return null;
   try {
-    const W = 700, H = 220;
+    const W = 800, H = 280;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext('2d');
+    const tierHex = `#${newTier.color.toString(16).padStart(6,'0')}`;
 
-    // Background gradient
-    const bg = ctx.createLinearGradient(0,0,W,H);
-    bg.addColorStop(0,'#1a1a2e');
-    bg.addColorStop(1,'#16213e');
-    ctx.fillStyle = bg;
-    ctx.roundRect(0,0,W,H,20);
+    // ── FOND ULTRA DARK ──────────────────────────────────────
+    const bgGrad = ctx.createLinearGradient(0, 0, W, H);
+    bgGrad.addColorStop(0, '#0d0d1a');
+    bgGrad.addColorStop(0.5, '#111122');
+    bgGrad.addColorStop(1, '#0a0a16');
+    ctx.fillStyle = bgGrad;
+    ctx.roundRect(0, 0, W, H, 24);
     ctx.fill();
 
-    // Accent stripe on left
-    ctx.fillStyle = `#${newTier.color.toString(16).padStart(6,'0')}`;
-    ctx.roundRect(0,0,8,H,20);
-    ctx.fill();
+    // ── GLOW RADIAL DERRIÈRE L'AVATAR ───────────────────────
+    const glowX = 130, glowY = 130;
+    const glow = ctx.createRadialGradient(glowX, glowY, 10, glowX, glowY, 180);
+    glow.addColorStop(0, `${tierHex}55`);
+    glow.addColorStop(0.5, `${tierHex}18`);
+    glow.addColorStop(1, 'transparent');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H);
 
-    // Avatar circle
-    const avatarURL = discordUser.displayAvatarURL({extension:'png',size:128});
-    try{
+    // ── GLOW CÔTÉ DROIT (ambiance) ───────────────────────────
+    const glow2 = ctx.createRadialGradient(W, 0, 20, W, 0, 300);
+    glow2.addColorStop(0, `${tierHex}22`);
+    glow2.addColorStop(1, 'transparent');
+    ctx.fillStyle = glow2;
+    ctx.fillRect(0, 0, W, H);
+
+    // ── PARTICULES DÉCO ──────────────────────────────────────
+    const particles = [
+      {x:460,y:30,r:3},{x:620,y:55,r:2},{x:530,y:80,r:1.5},
+      {x:700,y:30,r:2.5},{x:750,y:70,r:1},{x:490,y:20,r:1.5},
+      {x:670,y:90,r:3},{x:580,y:45,r:2},{x:720,y:120,r:1.5},
+      {x:440,y:60,r:1},{x:760,y:20,r:2},{x:510,y:100,r:2.5},
+    ];
+    for (const p of particles) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `${tierHex}cc`;
+      ctx.fill();
+    }
+
+    // ── BORDURE GLOW TIER ────────────────────────────────────
+    ctx.strokeStyle = `${tierHex}66`;
+    ctx.lineWidth = 2;
+    ctx.roundRect(1, 1, W - 2, H - 2, 24);
+    ctx.stroke();
+
+    // ── BARRE DÉCO TOP ───────────────────────────────────────
+    const topBar = ctx.createLinearGradient(0, 0, W, 0);
+    topBar.addColorStop(0, 'transparent');
+    topBar.addColorStop(0.3, tierHex);
+    topBar.addColorStop(0.7, tierHex);
+    topBar.addColorStop(1, 'transparent');
+    ctx.fillStyle = topBar;
+    ctx.fillRect(0, 0, W, 3);
+
+    // ── AVATAR ───────────────────────────────────────────────
+    const avatarURL = discordUser.displayAvatarURL({ extension: 'png', size: 256 });
+    try {
       const img = await loadImage(avatarURL);
+      // Outer glow ring
+      for (let i = 5; i > 0; i--) {
+        ctx.beginPath();
+        ctx.arc(glowX, glowY, 72 + i * 3, 0, Math.PI * 2);
+        ctx.strokeStyle = `${tierHex}${Math.round(20 + i * 8).toString(16).padStart(2,'0')}`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      // Clip avatar
       ctx.save();
       ctx.beginPath();
-      ctx.arc(90,110,55,0,Math.PI*2);
+      ctx.arc(glowX, glowY, 70, 0, Math.PI * 2);
       ctx.closePath();
       ctx.clip();
-      ctx.drawImage(img,35,55,110,110);
+      ctx.drawImage(img, glowX - 70, glowY - 70, 140, 140);
       ctx.restore();
-      // ring
+      // Sharp ring
       ctx.beginPath();
-      ctx.arc(90,110,57,0,Math.PI*2);
-      ctx.strokeStyle = `#${newTier.color.toString(16).padStart(6,'0')}`;
+      ctx.arc(glowX, glowY, 72, 0, Math.PI * 2);
+      ctx.strokeStyle = tierHex;
       ctx.lineWidth = 4;
       ctx.stroke();
-    }catch{}
+    } catch {}
 
-    // "LEVEL UP!" text
+    // ── BADGE TIER (coins droit de l'avatar) ─────────────────
+    const badgeX = glowX + 52, badgeY = glowY + 52;
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, 20, 0, Math.PI * 2);
+    ctx.fillStyle = '#0d0d1a';
+    ctx.fill();
+    ctx.strokeStyle = tierHex;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 36px sans-serif';
-    ctx.fillText('⬆️ LEVEL UP!', 170, 70);
+    ctx.fillText(newTier.emoji, badgeX, badgeY);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
 
-    // Old → New tier
-    ctx.font = '18px sans-serif';
-    ctx.fillStyle = '#a0a0b0';
-    ctx.fillText(`${oldTier.emoji} ${oldTier.name}`, 170, 100);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('→', 170 + ctx.measureText(`${oldTier.emoji} ${oldTier.name}`).width + 8, 100);
-    ctx.fillStyle = `#${newTier.color.toString(16).padStart(6,'0')}`;
-    ctx.font = 'bold 20px sans-serif';
-    ctx.fillText(`${newTier.emoji} ${newTier.name}`, 170 + ctx.measureText(`${oldTier.emoji} ${oldTier.name}`).width + 28, 100);
+    // ── TITRE LEVEL UP ───────────────────────────────────────
+    const textX = 240;
+
+    // Label "LEVEL UP" en petit caps stylé
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = `${tierHex}`;
+    ctx.letterSpacing = '4px';
+    ctx.fillText('▲  LEVEL  UP', textX, 55);
+    ctx.letterSpacing = '0px';
+
+    // Nom du tier
+    ctx.font = 'bold 46px sans-serif';
+    const nameGrad = ctx.createLinearGradient(textX, 60, textX + 400, 110);
+    nameGrad.addColorStop(0, '#ffffff');
+    nameGrad.addColorStop(1, tierHex);
+    ctx.fillStyle = nameGrad;
+    ctx.fillText(newTier.name, textX, 108);
+
+    // Ancien tier barré / flèche
+    ctx.font = '15px sans-serif';
+    ctx.fillStyle = '#555577';
+    ctx.fillText(`${oldTier.emoji}  ${oldTier.name}  →  `, textX, 135);
+    const arrowOffset = ctx.measureText(`${oldTier.emoji}  ${oldTier.name}  →  `).width;
+    ctx.fillStyle = tierHex;
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(`${newTier.emoji}  ${newTier.name}`, textX + arrowOffset, 135);
 
     // XP count
-    ctx.font = '15px sans-serif';
-    ctx.fillStyle = '#8888aa';
-    ctx.fillText(`${xp.toLocaleString('fr-FR')} XP total`, 170, 128);
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = '#6666aa';
+    ctx.fillText(`✨  ${xp.toLocaleString('fr-FR')} XP total`, textX, 158);
 
-    // Progress bar background
-    const barX=170, barY=148, barW=480, barH=22, barR=11;
-    ctx.fillStyle = '#2a2a3e';
-    ctx.roundRect(barX,barY,barW,barH,barR);
+    // ── BARRE DE PROGRESSION ─────────────────────────────────
+    const barX = textX, barY = 178, barW = 510, barH = 26, barR = 13;
+
+    // Shadow / fond
+    ctx.fillStyle = '#1a1a2e';
+    ctx.roundRect(barX, barY, barW, barH, barR);
     ctx.fill();
 
-    // Progress bar fill
+    // Inner dark track
+    ctx.fillStyle = '#0d0d1a';
+    ctx.roundRect(barX + 2, barY + 2, barW - 4, barH - 4, barR - 1);
+    ctx.fill();
+
+    // Calcul progression
     const nextTier = getNextXpTier(xp);
-    let pct = nextTier ? Math.min(1,(xp-newTier.xp)/(nextTier.xp-newTier.xp)) : 1;
-    const grad = ctx.createLinearGradient(barX,0,barX+barW*pct,0);
-    grad.addColorStop(0,'#5865F2');
-    grad.addColorStop(1,`#${newTier.color.toString(16).padStart(6,'0')}`);
-    ctx.fillStyle = grad;
-    ctx.roundRect(barX,barY,Math.max(barR*2,barW*pct),barH,barR);
+    const pct = nextTier ? Math.min(1, (xp - newTier.xp) / (nextTier.xp - newTier.xp)) : 1;
+    const fillW = Math.max(barR * 2, barW * pct);
+
+    // Gradient barre
+    const barGrad = ctx.createLinearGradient(barX, 0, barX + fillW, 0);
+    barGrad.addColorStop(0, '#5865F2');
+    barGrad.addColorStop(0.5, tierHex);
+    barGrad.addColorStop(1, '#ffffff44');
+    ctx.fillStyle = barGrad;
+    ctx.roundRect(barX + 2, barY + 2, fillW - 4, barH - 4, barR - 1);
     ctx.fill();
 
-    // Progress text
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 13px sans-serif';
-    const pctTxt = nextTier ? `${Math.round(pct*100)}% → ${nextTier.name} (${nextTier.xp} XP)` : '✨ MAXIMUM';
-    ctx.fillText(pctTxt, barX+10, barY+15);
+    // Shine sur la barre
+    const shine = ctx.createLinearGradient(barX, barY, barX, barY + barH);
+    shine.addColorStop(0, 'rgba(255,255,255,0.18)');
+    shine.addColorStop(0.5, 'transparent');
+    ctx.fillStyle = shine;
+    ctx.roundRect(barX + 2, barY + 2, fillW - 4, barH / 2, barR - 1);
+    ctx.fill();
 
-    // Footer
-    ctx.fillStyle = '#555566';
-    ctx.font = '12px sans-serif';
-    ctx.fillText('Wenzy Bot v7.5 • Système XP', W-240, H-12);
+    // Texte dans la barre
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillStyle = '#ffffff';
+    const barLabel = nextTier
+      ? `${Math.round(pct * 100)}%  —  ${xp.toLocaleString('fr-FR')} / ${nextTier.xp.toLocaleString('fr-FR')} XP`
+      : '⭐  NIVEAU MAXIMUM ATTEINT';
+    ctx.fillText(barLabel, barX + 12, barY + 17);
+
+    // Label prochain niveau
+    if (nextTier) {
+      ctx.font = '11px sans-serif';
+      ctx.fillStyle = `${tierHex}cc`;
+      ctx.textAlign = 'right';
+      ctx.fillText(`→ ${nextTier.name}`, barX + barW, barY - 5);
+      ctx.textAlign = 'left';
+    }
+
+    // ── FOOTER ───────────────────────────────────────────────
+    const footerY = H - 18;
+    ctx.fillStyle = '#2a2a40';
+    ctx.fillRect(textX, footerY - 1, barW, 1);
+
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#333355';
+    ctx.fillText('Wenzy Bot v8.0  •  Système XP', textX, footerY + 12);
+
+    // ── USERNAME en haut à droite ─────────────────────────────
+    const uname = discordUser.displayName ?? discordUser.username;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillStyle = '#8888bb';
+    ctx.textAlign = 'right';
+    ctx.fillText(`@${uname}`, W - 24, H - 18);
+    ctx.textAlign = 'left';
 
     const buffer = canvas.toBuffer('image/png');
     return buffer;
-  } catch(e) {
-    console.error('[LevelImage]',e.message);
+  } catch (e) {
+    console.error('[LevelImage]', e.message);
+    return null;
+  }
+}
+
+async function buildProfileImage(discordUser, userData) {
+  if (!createCanvas) return null;
+  try {
+    const W = 800, H = 300;
+    const canvas = createCanvas(W, H);
+    const ctx = canvas.getContext('2d');
+    const xp = userData?.xp ?? 0;
+    const tier = getXpTier(xp);
+    const nextTier = getNextXpTier(xp);
+    const tierHex = `#${tier.color.toString(16).padStart(6,'0')}`;
+    const pct = nextTier ? Math.min(1, (xp - tier.xp) / (nextTier.xp - tier.xp)) : 1;
+
+    // ── FOND ─────────────────────────────────────────────────
+    const bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#0d0d1a');
+    bg.addColorStop(1, '#0a0a16');
+    ctx.fillStyle = bg;
+    ctx.roundRect(0, 0, W, H, 24);
+    ctx.fill();
+
+    // ── BANNER TOP coloré ─────────────────────────────────────
+    const banner = ctx.createLinearGradient(0, 0, W, 90);
+    banner.addColorStop(0, `${tierHex}55`);
+    banner.addColorStop(1, 'transparent');
+    ctx.fillStyle = banner;
+    ctx.roundRect(0, 0, W, 90, {upperLeft:24, upperRight:24, lowerLeft:0, lowerRight:0});
+    ctx.fill();
+
+    // ── GLOW AVATAR ───────────────────────────────────────────
+    const gx = 110, gy = 145;
+    const glowR = ctx.createRadialGradient(gx, gy, 20, gx, gy, 160);
+    glowR.addColorStop(0, `${tierHex}44`);
+    glowR.addColorStop(1, 'transparent');
+    ctx.fillStyle = glowR;
+    ctx.fillRect(0, 0, W, H);
+
+    // ── PARTICULES ────────────────────────────────────────────
+    [[680,25,2],[730,50,1.5],[760,20,2.5],[500,35,1],[640,70,2],[550,20,1.5],[710,80,1],[480,55,2]].forEach(([x,y,r])=>{
+      ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fillStyle=`${tierHex}bb`; ctx.fill();
+    });
+
+    // ── BARRE DÉCO TOP ────────────────────────────────────────
+    const topBar = ctx.createLinearGradient(0, 0, W, 0);
+    topBar.addColorStop(0, 'transparent');
+    topBar.addColorStop(0.3, tierHex);
+    topBar.addColorStop(0.7, tierHex);
+    topBar.addColorStop(1, 'transparent');
+    ctx.fillStyle = topBar;
+    ctx.fillRect(0, 0, W, 3);
+
+    // ── BORDURE ───────────────────────────────────────────────
+    ctx.strokeStyle = `${tierHex}55`;
+    ctx.lineWidth = 2;
+    ctx.roundRect(1, 1, W-2, H-2, 24);
+    ctx.stroke();
+
+    // ── AVATAR ────────────────────────────────────────────────
+    const avatarURL = discordUser.displayAvatarURL({ extension: 'png', size: 256 });
+    try {
+      const img = await loadImage(avatarURL);
+      for (let i = 4; i > 0; i--) {
+        ctx.beginPath();
+        ctx.arc(gx, gy, 72 + i * 3, 0, Math.PI * 2);
+        ctx.strokeStyle = `${tierHex}${Math.round(15 + i * 10).toString(16).padStart(2,'0')}`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      ctx.save();
+      ctx.beginPath(); ctx.arc(gx, gy, 70, 0, Math.PI * 2); ctx.closePath(); ctx.clip();
+      ctx.drawImage(img, gx - 70, gy - 70, 140, 140);
+      ctx.restore();
+      ctx.beginPath(); ctx.arc(gx, gy, 72, 0, Math.PI * 2);
+      ctx.strokeStyle = tierHex; ctx.lineWidth = 4; ctx.stroke();
+    } catch {}
+
+    // Badge emoji tier
+    const bx = gx + 52, by = gy + 52;
+    ctx.beginPath(); ctx.arc(bx, by, 18, 0, Math.PI*2);
+    ctx.fillStyle = '#0d0d1a'; ctx.fill();
+    ctx.strokeStyle = tierHex; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff'; ctx.fillText(tier.emoji, bx, by);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+
+    // ── NOM + RANG ────────────────────────────────────────────
+    const tx = 220;
+    const uname = discordUser.displayName ?? discordUser.username;
+    ctx.font = 'bold 32px sans-serif';
+    const nameG = ctx.createLinearGradient(tx, 40, tx + 300, 80);
+    nameG.addColorStop(0, '#ffffff');
+    nameG.addColorStop(1, tierHex);
+    ctx.fillStyle = nameG;
+    ctx.fillText(uname, tx, 78);
+
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillStyle = tierHex;
+    ctx.fillText(`${tier.emoji}  ${tier.name}`, tx, 102);
+
+    // ── XP + BARRE ────────────────────────────────────────────
+    const barX = tx, barY = 118, barW = 540, barH = 24, barR = 12;
+    ctx.fillStyle = '#1a1a2e';
+    ctx.roundRect(barX, barY, barW, barH, barR); ctx.fill();
+    ctx.fillStyle = '#0a0a16';
+    ctx.roundRect(barX+2, barY+2, barW-4, barH-4, barR-1); ctx.fill();
+
+    if (pct > 0) {
+      const fillW = Math.max(barR*2, barW * pct);
+      const bg2 = ctx.createLinearGradient(barX, 0, barX+fillW, 0);
+      bg2.addColorStop(0, '#5865F2');
+      bg2.addColorStop(0.6, tierHex);
+      bg2.addColorStop(1, '#ffffff33');
+      ctx.fillStyle = bg2;
+      ctx.roundRect(barX+2, barY+2, fillW-4, barH-4, barR-1); ctx.fill();
+      // shine
+      const sh = ctx.createLinearGradient(barX, barY, barX, barY+barH);
+      sh.addColorStop(0,'rgba(255,255,255,0.15)'); sh.addColorStop(0.5,'transparent');
+      ctx.fillStyle = sh;
+      ctx.roundRect(barX+2, barY+2, fillW-4, barH/2, barR-1); ctx.fill();
+    }
+
+    ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = '#fff';
+    const barTxt = nextTier
+      ? `${xp.toLocaleString('fr-FR')} / ${nextTier.xp.toLocaleString('fr-FR')} XP  —  ${Math.round(pct*100)}%`
+      : '⭐  NIVEAU MAXIMUM ATTEINT';
+    ctx.fillText(barTxt, barX + 10, barY + 16);
+
+    if (nextTier) {
+      ctx.font = '11px sans-serif'; ctx.fillStyle = `${tierHex}cc`;
+      ctx.textAlign = 'right';
+      ctx.fillText(`→ ${nextTier.name}`, barX + barW, barY - 5);
+      ctx.textAlign = 'left';
+    }
+
+    // ── STATS ROW ─────────────────────────────────────────────
+    const stats = [
+      { label: 'TRADES',  value: String(userData?.trade_count ?? 0), icon: '🗡️' },
+      { label: 'VOUCHES', value: String(userData?.vouch_count ?? 0), icon: '💬' },
+      { label: 'PIÈCES',  value: (userData?.coins ?? 0).toLocaleString('fr-FR'), icon: '🪙' },
+      { label: 'STREAK',  value: `${userData?.daily_streak ?? 0}j`, icon: '🔥' },
+    ];
+    const statsY = 170, slotW = barW / stats.length;
+    for (let i = 0; i < stats.length; i++) {
+      const sx = barX + i * slotW;
+      // Separateur
+      if (i > 0) {
+        ctx.fillStyle = '#222235';
+        ctx.fillRect(sx, statsY, 1, 70);
+      }
+      ctx.font = '20px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(stats[i].icon, sx + slotW/2, statsY + 24);
+      ctx.font = 'bold 20px sans-serif'; ctx.fillStyle = '#ffffff';
+      ctx.fillText(stats[i].value, sx + slotW/2, statsY + 50);
+      ctx.font = '10px sans-serif'; ctx.fillStyle = '#555577';
+      ctx.fillText(stats[i].label, sx + slotW/2, statsY + 65);
+      ctx.textAlign = 'left';
+    }
+
+    // ── FOOTER ────────────────────────────────────────────────
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, H - 28, W, 28);
+    ctx.roundRect(0, H-28, W, 28, {upperLeft:0,upperRight:0,lowerLeft:24,lowerRight:24});
+    ctx.fill();
+    ctx.font = '11px sans-serif'; ctx.fillStyle = '#333355';
+    ctx.fillText('Wenzy Bot v8.0  •  Système XP', tx, H - 10);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#333355';
+    ctx.fillText('⭐ /level pour ta progression', W - 24, H - 10);
+    ctx.textAlign = 'left';
+
+    return canvas.toBuffer('image/png');
+  } catch (e) {
+    console.error('[ProfileImage]', e.message);
     return null;
   }
 }
@@ -2188,14 +2485,15 @@ const commands = [
         .setFooter({text:'Wenzy Bot v7.5 • Système XP'})
         .setTimestamp();
 
-      // Try canvas image
+      // Canvas image — carte de stats complète
       let files = [];
       try {
-        const imgBuffer = await buildLevelUpImage(target, currentTier, currentTier, xp);
-        if(imgBuffer) files = [{attachment:imgBuffer, name:'level.png'}];
+        const userData = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+        const imgBuffer = await buildProfileImage(target, userData);
+        if (imgBuffer) files = [{ attachment: imgBuffer, name: 'level.png' }];
       } catch {}
 
-      await interaction.editReply({embeds:[embed], files});
+      await interaction.editReply({ embeds: [embed], files });
     }
   },
 
