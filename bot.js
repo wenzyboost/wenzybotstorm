@@ -181,7 +181,7 @@ const safeMigrations = [
 ];
 for (const m of safeMigrations) { try { db.exec(m); } catch {} }
 
-// Default weapon values (armes du serveur réel + standards MM2)
+// Default weapon values
 const defaults = [
   ['Chroma Seer',165,'chroma'],['Corrupt',90,'godly'],['Hallowscythe',80,'godly'],
   ['Ancient Seer',200,'ancient'],['Chroma Harvester',150,'chroma'],
@@ -270,7 +270,7 @@ function getTradeRank(n) {
   return rank;
 }
 
-// ── WEAPON ROLES (du serveur réel) ───────────────────────────
+// ── WEAPON ROLES ─────────────────────────────────────────────
 const WEAPON_ROLES = [
   'Gingerscope', 'Traveler Axe', 'Vampire Axe', 'Harvester',
   'Icepiercer', 'Heart Blade', 'Elderwood Blade',
@@ -661,13 +661,10 @@ async function handleAntiRaid(guild, member) {
 
 // ── LEADERBOARDS ─────────────────────────────────────────────
 async function updateLeaderboards(guild) {
-  const cfg = getConfig(guild.id);
   const topTrades = db.prepare('SELECT * FROM users ORDER BY trade_count DESC LIMIT 10').all();
   const topCoins = db.prepare('SELECT * FROM users ORDER BY coins DESC LIMIT 10').all();
-  const topXp = db.prepare('SELECT * FROM users ORDER BY xp DESC LIMIT 10').all();
   const tradeCh = guild.channels.cache.find(c=>c.name.includes('classement') && c.name.toLowerCase().includes('trade'));
   const coinsCh = guild.channels.cache.find(c=>c.name.includes('classement') && (c.name.toLowerCase().includes('piece')||c.name.toLowerCase().includes('pièce')||c.name.toLowerCase().includes('coin')));
-  const xpCh = guild.channels.cache.find(c=>c.name.includes('level') || c.name.includes('xp'));
 
   async function refreshCh(ch, embed) {
     if (!ch) return;
@@ -684,7 +681,6 @@ async function updateStatChannels(guild) {
   const totalMembers = guild.memberCount;
   const verifiedCount = db.prepare('SELECT COUNT(*) as c FROM users WHERE verified=1').get()?.c??0;
   const tradesCount = db.prepare('SELECT COUNT(*) as c FROM trades WHERE status=?').get('completed')?.c??0;
-  const coinsTotal = db.prepare('SELECT SUM(coins) as s FROM users').get()?.s??0;
   const stats = [
     {find:'arrivés',name:`🛬 Arrivés: ${totalMembers}`},
     {find:'membres',name:`👥 Membres: ${totalMembers}`},
@@ -800,7 +796,6 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
         const freshUser = db.prepare('SELECT * FROM users WHERE discord_id=?').get(uid);
         await applyTradeRankRole(guild,member,freshUser.trade_count??0);
         await applyXpRoles(guild,member,freshUser.xp??0);
-        // Weapon role if earned
         if(freshUser.trade_count>=5){
           const topWeapon = db.prepare('SELECT weapon_name FROM inventory WHERE discord_id=? ORDER BY weapon_value DESC LIMIT 1').get(uid);
           if(topWeapon&&WEAPON_ROLES.some(w=>w.toLowerCase()===topWeapon.weapon_name.toLowerCase())){
@@ -812,7 +807,6 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
     }catch{}
   }
 
-  // Completed embed update
   if(trade.message_id&&trade.channel_id){
     try{
       const ch=await guild.channels.fetch(trade.channel_id).catch(()=>null);
@@ -829,7 +823,6 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
     }catch{}
   }
 
-  // Vouches channel
   const vouchCh = guild.channels.cache.find(c=>c.name.includes('preuves')||c.name.includes('vouche'));
   if(vouchCh){
     const off=JSON.parse(trade.offer_weapons),want=JSON.parse(trade.want_weapons);
@@ -974,9 +967,9 @@ async function restoreAllRoles(guild) {
 // ══════════════════════════════════════════════════════════════
 const commands = [
 
-  // /wenzy-setup — restructuré selon les vrais salons du serveur
+  // /wenzy-setup
   {
-    data: new SlashCommandBuilder().setName('wenzy-setup').setDescription('🏗️ Configure le serveur complet (selon la structure réelle)').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    data: new SlashCommandBuilder().setName('wenzy-setup').setDescription('🏗️ Configure le serveur complet').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     async execute(interaction) {
       await interaction.deferReply({ ephemeral: true });
       const guild = interaction.guild, log = [];
@@ -987,27 +980,22 @@ const commands = [
       }
       await new Promise(r=>setTimeout(r,2000));
 
-      // ══ RÔLES ══
       const roleDefs = [
-        // ── Top staff (personnalisés du serveur)
         { name:'Wenzy',               color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
         { name:'Madame Wenzy',        color:0xFF69B4, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
         { name:'Squidd',              color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
         { name:'Owners',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
         { name:'Co-Owners',           color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'----------------------',color:0x2C2F33, hoist:false, perms:[] },
         { name:'Superviseur Staff',   color:0xF39C12, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
         { name:'Chef Admins',         color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
         { name:'Admins',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
         { name:'Admins Test',         color:0xE67E22, hoist:false, perms:[PermissionFlagsBits.ModerateMembers] },
         { name:'Chef Modérateurs',    color:0x3498DB, hoist:true,  perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages,PermissionFlagsBits.KickMembers] },
-        { name:'Capitaine Modérateurs',color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
+        { name:'Capitaine Modérateurs',color:0x3498DB,hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
         { name:'Haut Modérateurs',    color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
         { name:'Modérateurs',         color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
         { name:'Modérateur Test',     color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
         { name:'Staff',               color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
-        { name:'----------------------',color:0x2C2F33, hoist:false, perms:[] },
-        // ── Spéciaux
         { name:'Amis',                color:0xE91E8C, hoist:true,  perms:[] },
         { name:'Contents Creators',   color:0xFF4500, hoist:true,  perms:[] },
         { name:'Protégés Des Owners', color:0x9B59B6, hoist:false, perms:[] },
@@ -1015,15 +1003,12 @@ const commands = [
         { name:'Middleman',           color:0x2ECC71, hoist:false, perms:[] },
         { name:'Soutien | .gg/wenzymm2', color:0x5865F2, hoist:false, perms:[] },
         { name:'Protéger de Kurai',   color:0x9B59B6, hoist:false, perms:[] },
-        { name:'----------------------',color:0x2C2F33, hoist:false, perms:[] },
-        // ── Trade ranks (synchro XP)
         { name:'50 - Goat',           color:0xF1C40F, hoist:true,  perms:[] },
         { name:'30 - Elites',         color:0x9B59B6, hoist:false, perms:[] },
         { name:'20 - Puants',         color:0x3498DB, hoist:false, perms:[] },
         { name:'15 - Pipelettes',     color:0x27AE60, hoist:false, perms:[] },
         { name:'10 - Bavards',        color:0x2ECC71, hoist:false, perms:[] },
         { name:'5 - Débutants',       color:0x95A5A6, hoist:false, perms:[] },
-        // ── Weapon roles
         { name:'Gingerscope',         color:0xFF6B35, hoist:false, perms:[] },
         { name:'Traveler Axe',        color:0x8B4513, hoist:false, perms:[] },
         { name:'Vampire Axe',         color:0xDC143C, hoist:false, perms:[] },
@@ -1031,28 +1016,18 @@ const commands = [
         { name:'Icepiercer',          color:0x87CEEB, hoist:false, perms:[] },
         { name:'Heart Blade',         color:0xFF69B4, hoist:false, perms:[] },
         { name:'Elderwood Blade',     color:0x556B2F, hoist:false, perms:[] },
-        // ── Membres
         { name:'Membres',             color:0x95A5A6, hoist:false, perms:[] },
         { name:'Homme',               color:0x3498DB, hoist:false, perms:[] },
         { name:'Femme',               color:0xE91E8C, hoist:false, perms:[] },
         { name:'+18',                 color:0xFF4500, hoist:false, perms:[] },
         { name:'-18',                 color:0x2ECC71, hoist:false, perms:[] },
-        // ── Système
         { name:'🔇 Muet',             color:0x2C2F33, hoist:false, perms:[] },
         { name:'🔒 Non Vérifié',      color:0x2C2F33, hoist:false, perms:[] },
         { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
       ];
 
-      // Dédupliquer par nom (séparateurs)
-      const seenRoles = new Set();
       const cr = {};
       for(const rd of roleDefs){
-        if(rd.name==='----------------------'){
-          if(seenRoles.has('sep')) continue;
-          seenRoles.add('sep');
-        } else {
-          seenRoles.add(rd.name);
-        }
         const ex = guild.roles.cache.find(r=>r.name===rd.name);
         if(ex){ cr[rd.name]=ex; }
         else{
@@ -1067,9 +1042,7 @@ const commands = [
       const nonv = cr['🔒 Non Vérifié'];
       const everyone = guild.id;
 
-      // ══ CATÉGORIES ET SALONS ══
       const catDefs = [
-        // ── 1. Arrivées / Départs (stats live)
         {
           name: '📊 STATISTIQUES',
           chs: [
@@ -1077,7 +1050,6 @@ const commands = [
             { name:'🛫 Départs: 0',  voice:true },
           ]
         },
-        // ── 2. Important
         {
           name: '📌 Côté Important',
           chs: [
@@ -1090,7 +1062,6 @@ const commands = [
             { name:'❓┃faq',              readonly:true },
           ]
         },
-        // ── 3. Cadeaux
         {
           name: '🎁 Côté Cadeaux',
           chs: [
@@ -1099,7 +1070,6 @@ const commands = [
             { name:'🧾┃preuves',           readonly:true },
           ]
         },
-        // ── 4. Contenu
         {
           name: '📺 Côté Contenu',
           chs: [
@@ -1109,7 +1079,6 @@ const commands = [
             { name:'👥┃posts-amis',        readonly:true },
           ]
         },
-        // ── 5. MM2 Trading
         {
           name: '🗡️ Côté Murder Mystery 2',
           chs: [
@@ -1122,7 +1091,6 @@ const commands = [
             { name:'🎮┃trade-autres' },
           ]
         },
-        // ── 6. Vérification
         {
           name: '🔑 VÉRIFICATION',
           chs: [
@@ -1132,7 +1100,6 @@ const commands = [
             { name:'🛒┃boutique' },
           ]
         },
-        // ── 7. Général
         {
           name: '💬 Côté Général',
           chs: [
@@ -1142,7 +1109,6 @@ const commands = [
             { name:'⭐┃level',             readonly:true },
           ]
         },
-        // ── 8. Fun
         {
           name: '🎮 Côté Fun',
           chs: [
@@ -1153,7 +1119,6 @@ const commands = [
             { name:'🎨┃fans-arts' },
           ]
         },
-        // ── 9. Vocaux
         {
           name: '🎙️ Côté Vocaux',
           chs: [
@@ -1166,9 +1131,7 @@ const commands = [
             { name:'👥┃trio-1',            voice:true },
           ]
         },
-        // ── 10. Vocaux privés (vide, se peuple auto)
         { name:'🗂️ VOCAUX PRIVÉS', chs:[] },
-        // ── 11. Support
         {
           name: '🎫 Côté Support',
           chs: [
@@ -1176,7 +1139,6 @@ const commands = [
             { name:'📋┃candidatures' },
           ]
         },
-        // ── 12. Staff (privé)
         {
           name: 'Staff',
           chs: [
@@ -1187,7 +1149,6 @@ const commands = [
             { name:'⚠️┃sanctions-staff',  staff:true },
           ]
         },
-        // ── 13. Tickets (vide, se peuple auto)
         { name:'🎫 TICKETS OUVERTS', chs:[] },
       ];
 
@@ -1213,7 +1174,7 @@ const commands = [
             if(nonv)cpows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
             for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.SendMessages]});
           } else if(ch.voice||ch.createPv){
-            // vocal — pas de perms spéciales
+            // vocal
           } else {
             cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel]});
             if(nonv)cpows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
@@ -1228,12 +1189,10 @@ const commands = [
         }
       }
 
-      // ── AUTOMOD CONFIG ──
       db.prepare('INSERT OR REPLACE INTO automod_config (guild_id,block_links,anti_spam,anti_caps,anti_raid,max_warns_mute,max_warns_kick) VALUES (?,1,1,1,1,3,5)').run(guild.id);
       db.prepare('INSERT OR REPLACE INTO server_config (guild_id) VALUES (?)').run(guild.id);
       log.push('✅ AutoMod activé');
 
-      // ── EMBED VÉRIFICATION ──
       const verifCh = cm['🔑┃vérification'];
       if(verifCh){
         await verifCh.send({
@@ -1258,7 +1217,6 @@ const commands = [
         log.push('✅ Embed vérification');
       }
 
-      // ── EMBED LIER-ROBLOX ──
       const lierCh = cm['🔗┃lier-roblox'];
       if(lierCh){
         await lierCh.send({
@@ -1279,7 +1237,6 @@ const commands = [
         log.push('✅ Embed lier-roblox');
       }
 
-      // ── EMBED RÈGLEMENT ──
       const regleCh = cm['📋┃règlement'];
       if(regleCh){
         const cfg2 = getConfig(guild.id);
@@ -1308,7 +1265,6 @@ const commands = [
         log.push('✅ Embed règlement');
       }
 
-      // ── EMBED TICKET ──
       const ticketCh = cm['🎫┃ticket'];
       if(ticketCh){
         await ticketCh.send({
@@ -1341,7 +1297,6 @@ const commands = [
         log.push('✅ Embed ticket');
       }
 
-      // ── EMBED CRÉER VOCAL ──
       const createVocalCh = cm['🏗️┃créer-un-vocal'];
       if(createVocalCh){
         await createVocalCh.send({
@@ -1365,7 +1320,6 @@ const commands = [
         log.push('✅ Embed vocal privé');
       }
 
-      // ── EMBED POSTER UN TRADE (dans bot-cmds) ──
       const botCmdsCh = cm['⌨️┃bot-cmds'];
       if(botCmdsCh){
         await botCmdsCh.send({
@@ -1406,11 +1360,9 @@ const commands = [
         log.push('✅ Embed bot-cmds');
       }
 
-      // ── BOUTIQUE ──
       const boutiqueCh = cm['🛒┃boutique'];
       if(boutiqueCh){ await postShopEmbed(boutiqueCh); log.push('✅ Boutique'); }
 
-      // ── EMBED GIVEAWAYS ──
       const giveawayCh = cm['🎉┃giveaways'];
       if(giveawayCh){
         await giveawayCh.send({
@@ -1427,7 +1379,6 @@ const commands = [
         log.push('✅ Embed giveaways');
       }
 
-      // Leaderboards + stats
       await updateLeaderboards(guild);
       await updateStatChannels(guild);
       log.push('✅ Stats et leaderboards initialisés');
@@ -1448,14 +1399,14 @@ const commands = [
     }
   },
 
-  // /panel — NOUVELLE commande principale de configuration
+  // /panel
   {
     data: new SlashCommandBuilder().setName('panel').setDescription('⚙️ Panneau de configuration complet du serveur')
       .addSubcommand(s=>s.setName('overview').setDescription('📊 Vue d\'ensemble de la configuration'))
-      .addSubcommand(s=>s.setName('channels').setDescription('📢 Configurer les salons clés (logs, bienvenue, trades...)')
+      .addSubcommand(s=>s.setName('channels').setDescription('📢 Configurer les salons clés')
         .addStringOption(o=>o.setName('type').setDescription('Type de salon').setRequired(true)
           .addChoices(
-            {name:'📋 Logs (cmds staff)',value:'logs'},
+            {name:'📋 Logs',value:'logs'},
             {name:'👋 Bienvenue',value:'welcome'},
             {name:'🗡️ Trades MM2',value:'trades'},
             {name:'🎫 Tickets',value:'ticket'},
@@ -1480,7 +1431,7 @@ const commands = [
           ))
         .addBooleanOption(o=>o.setName('actif').setDescription('Activer ou désactiver').setRequired(true)))
       .addSubcommand(s=>s.setName('welcome-msg').setDescription('👋 Personnaliser le message de bienvenue')
-        .addStringOption(o=>o.setName('message').setDescription('Message (utilise {user} pour mentionner)').setRequired(true)))
+        .addStringOption(o=>o.setName('message').setDescription('Message').setRequired(true)))
       .addSubcommand(s=>s.setName('rules').setDescription('📋 Personnaliser le règlement')
         .addStringOption(o=>o.setName('texte').setDescription('Texte du règlement').setRequired(true)))
       .addSubcommand(s=>s.setName('youtube').setDescription('▶️ Configurer les notifications YouTube')
@@ -1496,9 +1447,9 @@ const commands = [
             {name:'🚨 Toggle anti-raid',value:'raid'},
           ))
         .addBooleanOption(o=>o.setName('actif').setDescription('Activer/désactiver').setRequired(false))
-        .addStringOption(o=>o.setName('mot').setDescription('Mot banni (pour addword/removeword)').setRequired(false)))
+        .addStringOption(o=>o.setName('mot').setDescription('Mot banni').setRequired(false)))
       .addSubcommand(s=>s.setName('roles').setDescription('🏷️ Synchroniser les rôles des membres vérifiés'))
-      .addSubcommand(s=>s.setName('stats').setDescription('📊 Statistiques du serveur (membres, trades, pièces)'))
+      .addSubcommand(s=>s.setName('stats').setDescription('📊 Statistiques du serveur'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     async execute(interaction) {
       await interaction.deferReply({ ephemeral: true });
@@ -1512,10 +1463,9 @@ const commands = [
         const amc = db.prepare('SELECT * FROM automod_config WHERE guild_id=?').get(gid);
         return interaction.editReply({ embeds:[new EmbedBuilder().setColor(C.primary)
           .setAuthor({name:'⚙️ Panneau de Configuration — Wenzy Bot v7'})
-          .setDescription('Vue d\'ensemble de la configuration actuelle.')
           .addFields(
             {name:'📢 Salons configurés',value:[
-              `Logs : ${cfg.logs_channel?`<#${cfg.logs_channel}>`:'❌ Non configuré'}`,
+              `Logs : ${cfg.logs_channel?`<#${cfg.logs_channel}>`:'❌'}`,
               `Bienvenue : ${cfg.welcome_channel?`<#${cfg.welcome_channel}>`:'❌'}`,
               `Trades : ${cfg.trades_channel?`<#${cfg.trades_channel}>`:'❌'}`,
               `Tickets : ${cfg.ticket_channel?`<#${cfg.ticket_channel}>`:'❌'}`,
@@ -1532,17 +1482,16 @@ const commands = [
               `${cfg.ticket_enabled?'✅':'❌'} Tickets`,
               `${cfg.mm2_enabled?'✅':'❌'} Trades MM2`,
               `${cfg.automod_enabled?'✅':'❌'} AutoMod`,
-              `${cfg.youtube_notif_enabled?'✅':'❌'} YouTube Notifs`,
-              `${cfg.tiktok_notif_enabled?'✅':'❌'} TikTok Notifs`,
+              `${cfg.youtube_notif_enabled?'✅':'❌'} YouTube`,
+              `${cfg.tiktok_notif_enabled?'✅':'❌'} TikTok`,
             ].join('\n'),inline:true},
             {name:'🛡️ AutoMod',value:amc?[
               `${amc.block_links?'✅':'❌'} Blocage liens`,
               `${amc.anti_spam?'✅':'❌'} Anti-spam`,
               `${amc.anti_caps?'✅':'❌'} Anti-caps`,
               `${amc.anti_raid?'✅':'❌'} Anti-raid`,
-              `Mots bannis : ${JSON.parse(amc.banned_words||'[]').length}`,
             ].join('\n'):'Non configuré',inline:true},
-          ).setFooter({text:'Utilise /panel <sous-commande> pour modifier'}).setTimestamp()] });
+          ).setTimestamp()] });
       }
 
       if (sub === 'channels') {
@@ -1559,14 +1508,13 @@ const commands = [
         const feature = interaction.options.getString('feature');
         const actif = interaction.options.getBoolean('actif');
         db.prepare(`UPDATE server_config SET ${feature}=? WHERE guild_id=?`).run(actif?1:0,gid);
-        const labels = {xp_enabled:'Système XP',coins_enabled:'Économie',welcome_enabled:'Bienvenue',ticket_enabled:'Tickets',mm2_enabled:'Trades MM2',automod_enabled:'AutoMod',youtube_notif_enabled:'Notifs YouTube',tiktok_notif_enabled:'Notifs TikTok'};
-        return interaction.editReply(`${actif?'✅':'❌'} **${labels[feature]??feature}** ${actif?'activé':'désactivé'}.`);
+        return interaction.editReply(`${actif?'✅':'❌'} **${feature}** ${actif?'activé':'désactivé'}.`);
       }
 
       if (sub === 'welcome-msg') {
         const msg = interaction.options.getString('message');
         db.prepare('UPDATE server_config SET custom_welcome_msg=? WHERE guild_id=?').run(msg,gid);
-        return interaction.editReply(`✅ Message de bienvenue mis à jour !\n**Preview :** ${msg.replace('{user}',`<@${interaction.user.id}>`)}`);
+        return interaction.editReply(`✅ Message de bienvenue mis à jour !`);
       }
 
       if (sub === 'rules') {
@@ -1576,7 +1524,7 @@ const commands = [
         if(regleCh){
           const msgs = await regleCh.messages.fetch({limit:5});
           for(const m of msgs.values()) if(m.author.bot) await m.delete().catch(()=>{});
-          await regleCh.send({embeds:[new EmbedBuilder().setColor(C.primary).setAuthor({name:`📋 Règlement — ${interaction.guild.name}`}).setDescription(texte).setFooter({text:'Wenzy Bot v7  •  Règlement'}).setTimestamp()]});
+          await regleCh.send({embeds:[new EmbedBuilder().setColor(C.primary).setAuthor({name:`📋 Règlement — ${interaction.guild.name}`}).setDescription(texte).setTimestamp()]});
         }
         return interaction.editReply('✅ Règlement mis à jour !');
       }
@@ -1587,7 +1535,7 @@ const commands = [
         if(apiKey) process.env.YOUTUBE_API_KEY = apiKey;
         process.env.YOUTUBE_CHANNEL_ID = channelId;
         db.prepare('UPDATE server_config SET youtube_notif_enabled=1 WHERE guild_id=?').run(gid);
-        return interaction.editReply(`✅ YouTube configuré !\nChannel ID : \`${channelId}\`\nNotifications activées.`);
+        return interaction.editReply(`✅ YouTube configuré ! Channel ID : \`${channelId}\``);
       }
 
       if (sub === 'automod') {
@@ -1595,8 +1543,6 @@ const commands = [
         const amc = db.prepare('SELECT * FROM automod_config WHERE guild_id=?').get(gid);
         const action = interaction.options.getString('action');
         const actif = interaction.options.getBoolean('actif');
-        const mot = interaction.options.getString('mot');
-
         if(action==='status'){
           const words=JSON.parse(amc.banned_words||'[]');
           return interaction.editReply({embeds:[new EmbedBuilder().setColor(C.info)
@@ -1606,8 +1552,6 @@ const commands = [
               {name:'📨 Spam',value:amc.anti_spam?'✅':'❌',inline:true},
               {name:'🔠 Caps',value:amc.anti_caps?'✅':'❌',inline:true},
               {name:'🚨 Anti-raid',value:amc.anti_raid?'✅':'❌',inline:true},
-              {name:'⚠️ Warns Mute',value:`${amc.max_warns_mute}`,inline:true},
-              {name:'🦶 Warns Kick',value:`${amc.max_warns_kick}`,inline:true},
               {name:'🚫 Mots bannis',value:words.length?words.map(w=>`\`${w}\``).join(', '):'Aucun',inline:false},
             ).setTimestamp()]});
         }
@@ -1619,7 +1563,7 @@ const commands = [
 
       if (sub === 'roles') {
         await restoreAllRoles(interaction.guild);
-        return interaction.editReply('✅ Rôles synchronisés pour tous les membres vérifiés !');
+        return interaction.editReply('✅ Rôles synchronisés !');
       }
 
       if (sub === 'stats') {
@@ -1629,7 +1573,6 @@ const commands = [
         const openTrades = db.prepare('SELECT COUNT(*) as c FROM trades WHERE status=?').get('open')?.c??0;
         const totalCoins = db.prepare('SELECT SUM(coins) as s FROM users').get()?.s??0;
         const totalXp = db.prepare('SELECT SUM(xp) as s FROM users').get()?.s??0;
-        const tickets = db.prepare('SELECT COUNT(*) as c FROM tickets WHERE status!=?').get('closed')?.c??0;
         return interaction.editReply({embeds:[new EmbedBuilder().setColor(C.info)
           .setAuthor({name:'📊 Statistiques du Serveur'})
           .addFields(
@@ -1637,9 +1580,8 @@ const commands = [
             {name:'✅ Vérifiés',value:`${verified}`,inline:true},
             {name:'🗡️ Trades complétés',value:`${tradesCount}`,inline:true},
             {name:'📤 Trades ouverts',value:`${openTrades}`,inline:true},
-            {name:'🪙 Pièces en circulation',value:`${totalCoins.toLocaleString('fr-FR')}`,inline:true},
+            {name:'🪙 Pièces',value:`${totalCoins.toLocaleString('fr-FR')}`,inline:true},
             {name:'✨ XP total',value:`${totalXp.toLocaleString('fr-FR')}`,inline:true},
-            {name:'🎫 Tickets ouverts',value:`${tickets}`,inline:true},
           ).setTimestamp()]});
       }
     }
@@ -1679,7 +1621,7 @@ const commands = [
   // /trade
   {
     data: new SlashCommandBuilder().setName('trade').setDescription('🗡️ Système de trades MM2')
-      .addSubcommand(s=>s.setName('post').setDescription('📤 Poster un trade').addStringOption(o=>o.setName('offre').setDescription('Armes offertes (virgules)').setRequired(true)).addStringOption(o=>o.setName('cherche').setDescription('Ce que tu cherches').setRequired(true)).addIntegerOption(o=>o.setName('offre-val').setDescription('Total value offre (si arme inconnue)').setRequired(false)).addIntegerOption(o=>o.setName('cherche-val').setDescription('Total value recherche').setRequired(false)))
+      .addSubcommand(s=>s.setName('post').setDescription('📤 Poster un trade').addStringOption(o=>o.setName('offre').setDescription('Armes offertes (virgules)').setRequired(true)).addStringOption(o=>o.setName('cherche').setDescription('Ce que tu cherches').setRequired(true)).addIntegerOption(o=>o.setName('offre-val').setDescription('Total value offre').setRequired(false)).addIntegerOption(o=>o.setName('cherche-val').setDescription('Total value recherche').setRequired(false)))
       .addSubcommand(s=>s.setName('cancel').setDescription('❌ Annuler ton trade').addIntegerOption(o=>o.setName('id').setDescription('ID du trade').setRequired(true)))
       .addSubcommand(s=>s.setName('check').setDescription('⚖️ Price check').addStringOption(o=>o.setName('offre').setDescription('Armes offertes').setRequired(true)).addStringOption(o=>o.setName('recois').setDescription('Armes reçues').setRequired(true))),
     async execute(interaction) {
@@ -1702,7 +1644,7 @@ const commands = [
           .addFields(
             {name:'📤 Tu offres',value:od.map(w=>`${tierBadge(w.tier)} **${w.name}** → \`${w.value} val\``).join('\n')+`\n\n**TOTAL : ${ov} val**`,inline:true},
             {name:'📥 Tu reçois',value:rd.map(w=>`${tierBadge(w.tier)} **${w.name}** → \`${w.value} val\``).join('\n')+`\n\n**TOTAL : ${rv} val**`,inline:true},
-            {name:'⚖️ Résultat',value:`${fair?'✅ **Fair**':diff>0?'📉 **Unfair** — tu perds':'📈 **Avantageux** pour toi'}\nDiff : **${Math.abs(diff)} val**\n\`[${bar}]\``,inline:false},
+            {name:'⚖️ Résultat',value:`${fair?'✅ **Fair**':diff>0?'📉 **Unfair**':'📈 **Avantageux**'}\nDiff : **${Math.abs(diff)} val**\n\`[${bar}]\``,inline:false},
           ).setTimestamp()]});
       }
     }
@@ -1735,7 +1677,7 @@ const commands = [
       const streak = (now-last<172800)?((user.daily_streak??0)+1):1;
       let coins = 100+(streak*10), bonus='';
       if (streak===7){coins+=500;bonus='\n🎁 **Bonus 7 jours : +500 🪙 !**';}
-      if (streak===30){coins+=2000;bonus='\n🏆 **Bonus 30 jours : +2000 🪙 + rôle !**';const r=interaction.guild.roles.cache.find(x=>x.name==='Boosteurs');if(r)await interaction.member.roles.add(r).catch(()=>{});}
+      if (streak===30){coins+=2000;bonus='\n🏆 **Bonus 30 jours : +2000 🪙 !**';const r=interaction.guild.roles.cache.find(x=>x.name==='Boosteurs');if(r)await interaction.member.roles.add(r).catch(()=>{});}
       db.prepare('UPDATE users SET coins=coins+?,daily_streak=?,last_daily=? WHERE discord_id=?').run(coins,streak,now,did);
       await addXp(interaction.guild,did,20);
       await interaction.editReply({embeds:[new EmbedBuilder().setColor(C.success)
@@ -1813,7 +1755,13 @@ const commands = [
           new ButtonBuilder().setCustomId(`duel_refuse_${duelId}`).setLabel('❌ Refuser').setStyle(ButtonStyle.Danger),
         )],
       });
-      setTimeout(async()=>{const d=db.prepare('SELECT * FROM duels WHERE id=?').get(duelId);if(d?.status==='pending'){db.prepare('UPDATE duels SET status=? WHERE id=?').run('cancelled',duelId);await interaction.editReply({embeds:[new EmbedBuilder().setColor(C.danger).setDescription('❌ Duel annulé — pas de réponse.')],components:[]}).catch(()=>{});}},120000);
+      setTimeout(async()=>{
+        const d=db.prepare('SELECT * FROM duels WHERE id=?').get(duelId);
+        if(d?.status==='pending'){
+          db.prepare('UPDATE duels SET status=? WHERE id=?').run('cancelled',duelId);
+          await interaction.editReply({embeds:[new EmbedBuilder().setColor(C.danger).setDescription('❌ Duel annulé — pas de réponse.')],components:[]}).catch(()=>{});
+        }
+      },120000);
     }
   },
 
@@ -1896,7 +1844,7 @@ const commands = [
       const member=await interaction.guild.members.fetch(target.id).catch(()=>null);
       if(member)await applyXpRoles(interaction.guild,member,u.xp);
       await sendLog(interaction.guild,new EmbedBuilder().setColor(C.success).setAuthor({name:`${amount>=0?'➕':'➖'} XP modifié`}).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'✨ Modif',value:`${amount>=0?'+':''}${amount} XP`,inline:true},{name:'📊 Total',value:`${u.xp} XP — ${getXpTier(u.xp).name}`,inline:true},{name:'📝 Raison',value:reason},{name:'🛡️ Staff',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
-      await interaction.editReply(`✅ <@${target.id}> → **${amount>=0?'+':''}${amount} XP** | Total : **${u.xp} XP** | ${getXpTier(u.xp).name}`);
+      await interaction.editReply(`✅ <@${target.id}> → **${amount>=0?'+':''}${amount} XP** | Total : **${u.xp} XP**`);
     }
   },
 
@@ -1910,7 +1858,7 @@ const commands = [
       db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(target.id);
       db.prepare('UPDATE users SET coins=MAX(0,coins+?) WHERE discord_id=?').run(amount,target.id);
       const u=db.prepare('SELECT coins FROM users WHERE discord_id=?').get(target.id);
-      await sendLog(interaction.guild,new EmbedBuilder().setColor(C.success).setAuthor({name:`${amount>=0?'➕':'➖'} Pièces modifiées`}).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'🪙 Modif',value:`${amount>=0?'+':''}${amount} 🪙`,inline:true},{name:'💰 Total',value:`${u.coins} 🪙`,inline:true},{name:'📝 Raison',value:reason},{name:'🛡️ Staff',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
+      await sendLog(interaction.guild,new EmbedBuilder().setColor(C.success).setAuthor({name:`${amount>=0?'➕':'➖'} Pièces modifiées`}).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'🪙 Modif',value:`${amount>=0?'+':''}${amount} 🪙`,inline:true},{name:'💰 Total',value:`${u.coins} 🪙`,inline:true},{name:'📝 Raison',value:reason}).setTimestamp());
       await interaction.editReply(`✅ <@${target.id}> → **${amount>=0?'+':''}${amount} 🪙** | Total : **${u.coins} 🪙**`);
     }
   },
@@ -1951,7 +1899,7 @@ const commands = [
     }
   },
 
-  // /unlock (anti-raid)
+  // /unlock
   {
     data: new SlashCommandBuilder().setName('unlock').setDescription('🔓 (Admin) Déverrouiller le serveur').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     async execute(interaction){
@@ -2034,7 +1982,7 @@ const commands = [
       await interaction.deferReply({ephemeral:true});
       const weapon=interaction.options.getString('arme'),maxVal=interaction.options.getInteger('valeur-max');
       db.prepare('INSERT INTO price_alerts (discord_id,weapon_name,max_value) VALUES (?,?,?)').run(interaction.user.id,weapon,maxVal);
-      await interaction.editReply(`✅ Alerte créée : **${weapon}** ≤ **${maxVal} val** — DM quand ce trade est posté !`);
+      await interaction.editReply(`✅ Alerte créée : **${weapon}** ≤ **${maxVal} val**`);
     }
   },
 
@@ -2059,7 +2007,6 @@ const commands = [
 async function handleButton(interaction) {
   const { customId, guild, user } = interaction;
 
-  // ── VÉRIFICATION ──
   if (customId === 'btn_link_start') {
     const modal = new ModalBuilder().setCustomId('modal_link_roblox').setTitle('🔗 Lier ton compte Roblox');
     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('roblox_username').setLabel('Ton pseudo Roblox exact').setStyle(TextInputStyle.Short).setPlaceholder('ex: WenzyFR').setRequired(true).setMinLength(3).setMaxLength(20)));
@@ -2067,7 +2014,6 @@ async function handleButton(interaction) {
   }
   if (customId === 'btn_verify_now') { await interaction.deferReply({ ephemeral:true }); return doVerify(interaction); }
 
-  // ── TRADE POST BUTTON ──
   if (customId === 'btn_post_trade') {
     const modal = new ModalBuilder().setCustomId('modal_post_trade').setTitle('🗡️ Poster un Trade MM2');
     modal.addComponents(
@@ -2079,7 +2025,6 @@ async function handleButton(interaction) {
     return interaction.showModal(modal);
   }
 
-  // ── VOCAL PRIVÉ ──
   if (customId === 'btn_create_vocal') {
     await interaction.deferReply({ ephemeral:true });
     const member = await guild.members.fetch(user.id).catch(()=>null);
@@ -2103,11 +2048,10 @@ async function handleButton(interaction) {
       });
       db.prepare('INSERT OR REPLACE INTO private_vocals (channel_id,owner_id) VALUES (?,?)').run(ch.id,member.id);
       if (member.voice.channel) await member.voice.setChannel(ch).catch(()=>{});
-      return interaction.editReply(`✅ Vocal privé créé : **${ch.name}**\n\`!open\` / \`!close\` / \`!add @user\` / \`!kick @user\` / \`!rename <nom>\``);
+      return interaction.editReply(`✅ Vocal privé créé : **${ch.name}**`);
     } catch(e) { return interaction.editReply('❌ Erreur création vocal.'); }
   }
 
-  // ── SHOP ──
   if (customId === 'shop_mes_pieces') {
     await interaction.deferReply({ ephemeral:true });
     const u = db.prepare('SELECT * FROM users WHERE discord_id=?').get(user.id);
@@ -2164,15 +2108,6 @@ async function handleButton(interaction) {
     );
     return interaction.showModal(modal);
   }
-
-  // ── TICKETS ──
-  const ticketModals = {
-    'ticket_open_litige': {title:'⚔️ Litige Trade',id:'modal_ticket_litige'},
-    'ticket_open_report': {title:'🚨 Report Scam',id:'modal_ticket_report'},
-    'ticket_open_support': {title:'🎧 Support',id:'modal_ticket_support'},
-    'ticket_open_middleman': null,
-    'ticket_open_candidature': null,
-  };
 
   if (customId === 'ticket_open_litige') {
     const modal=new ModalBuilder().setCustomId('modal_ticket_litige').setTitle('⚔️ Litige Trade');
@@ -2240,7 +2175,6 @@ async function handleButton(interaction) {
     return interaction.editReply('✅ Ticket fermé.');
   }
 
-  // ── GIVEAWAY ──
   if (customId.startsWith('gw_join_')) {
     await interaction.deferReply({ ephemeral:true });
     const gwId=parseInt(customId.replace('gw_join_',''));
@@ -2250,7 +2184,19 @@ async function handleButton(interaction) {
     if (participants.includes(user.id)) return interaction.editReply('⚠️ Tu participes déjà !');
     participants.push(user.id);
     db.prepare('UPDATE giveaways SET participants=? WHERE id=?').run(JSON.stringify(participants),gwId);
-    try{const ch=await interaction.client.channels.fetch(gw.channel_id).catch(()=>null);if(ch&&gw.message_id){const msg=await ch.messages.fetch(gw.message_id).catch(()=>null);if(msg){const embed=msg.embeds[0];if(embed){const ne=EmbedBuilder.from(embed).setFooter({text:`Giveaway #${gwId} — ${participants.length} participant(s)`});await msg.edit({embeds:[ne]}).catch(()=>{});}}}}catch{}
+    try{
+      const ch=await interaction.client.channels.fetch(gw.channel_id).catch(()=>null);
+      if(ch&&gw.message_id){
+        const msg=await ch.messages.fetch(gw.message_id).catch(()=>null);
+        if(msg){
+          const embed=msg.embeds[0];
+          if(embed){
+            const ne=EmbedBuilder.from(embed).setFooter({text:`Giveaway #${gwId} — ${participants.length} participant(s)`});
+            await msg.edit({embeds:[ne]}).catch(()=>{});
+          }
+        }
+      }
+    }catch{}
     return interaction.editReply(`✅ Tu participes au giveaway **${gw.prize}** !`);
   }
   if (customId.startsWith('gw_leave_')) {
@@ -2263,7 +2209,6 @@ async function handleButton(interaction) {
     return interaction.editReply('❌ Retiré du giveaway.');
   }
 
-  // ── STAFF TRADE VERIFY ──
   if (customId.startsWith('staff_validate_')) {
     await interaction.deferReply({ ephemeral:true });
     if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
@@ -2283,7 +2228,6 @@ async function handleButton(interaction) {
     return interaction.editReply(`⚠️ Screenshot du trade **#${tid}** rejeté.`);
   }
 
-  // ── TRADE BUTTONS ──
   if (customId.startsWith('trade_accept_')) {
     await interaction.deferReply({ ephemeral:true });
     const tid=parseInt(customId.replace('trade_accept_',''));
@@ -2299,7 +2243,16 @@ async function handleButton(interaction) {
     const accepter=db.prepare('SELECT * FROM users WHERE discord_id=?').get(user.id);
 
     if (trade.message_id&&trade.channel_id){
-      try{const tCh2=await guild.channels.fetch(trade.channel_id).catch(()=>null);if(tCh2){const msg=await tCh2.messages.fetch(trade.message_id).catch(()=>null);if(msg){const inProgressEmbed=new EmbedBuilder().setColor(C.warning).setAuthor({name:`⏳ TRADE #${String(tid).padStart(4,'0')} — EN COURS`}).setDescription(`> <@${trade.poster_id}> × <@${user.id}>\n> Lancé <t:${trade.created_at}:R>`).setTimestamp();await msg.edit({embeds:[inProgressEmbed],components:[]}).catch(()=>{});}}}catch{}
+      try{
+        const tCh2=await guild.channels.fetch(trade.channel_id).catch(()=>null);
+        if(tCh2){
+          const msg=await tCh2.messages.fetch(trade.message_id).catch(()=>null);
+          if(msg){
+            const inProgressEmbed=new EmbedBuilder().setColor(C.warning).setAuthor({name:`⏳ TRADE #${String(tid).padStart(4,'0')} — EN COURS`}).setDescription(`> <@${trade.poster_id}> × <@${user.id}>\n> Lancé <t:${trade.created_at}:R>`).setTimestamp();
+            await msg.edit({embeds:[inProgressEmbed],components:[]}).catch(()=>{});
+          }
+        }
+      }catch{}
     }
 
     let thread;
@@ -2320,11 +2273,11 @@ async function handleButton(interaction) {
       await thread.send({
         embeds:[new EmbedBuilder().setColor(C.warning)
           .setAuthor({name:`🗡️ TRADE EN COURS — #${String(tid).padStart(4,'0')}`})
-          .setDescription([`> <@${trade.poster_id}> × <@${user.id}>`,'','**📋 Pour finaliser :**','1. Rejoins le serveur privé MM2 (lien ci-dessous)','2. Fais le trade en jeu','3. Prends un screenshot de **"YOU HAVE ACCEPTED"**','4. Envoie le screenshot ici','5. ⚠️ Un staff validera manuellement'].join('\n'))
+          .setDescription([`> <@${trade.poster_id}> × <@${user.id}>`,'','**📋 Pour finaliser :**','1. Rejoins le serveur privé MM2','2. Fais le trade en jeu','3. Prends un screenshot de **"YOU HAVE ACCEPTED"**','4. Envoie le screenshot ici'].join('\n'))
           .addFields(
             {name:'📤 Offre',value:off.map(w=>`${tierBadge(w.tier??'godly')} **${w.name}** \`${w.value}v\``).join('\n')+`\n\n**TOTAL : ${updated.offer_value} val**`,inline:true},
             {name:'📥 Recherche',value:want.map(w=>`**${w.name}**`).join('\n'),inline:true},
-          ).setFooter({text:'Screenshot requis pour valider'}).setTimestamp()],
+          ).setTimestamp()],
         components:[threadButtons(tid)],
       });
       if (server) await thread.send(`🎮 **Serveur Privé MM2 :**\n${server.link}`);
@@ -2347,7 +2300,6 @@ async function handleButton(interaction) {
   if (customId.startsWith('mm_validate_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_validate_',''));const trade=db.prepare('SELECT * FROM trades WHERE id=?').get(tid);await completeTrade(guild,tid,trade?.screenshot_url??null);return interaction.editReply(`✅ Trade **#${tid}** validé.`);}
   if (customId.startsWith('mm_cancel_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_cancel_',''));db.prepare('UPDATE trades SET status=? WHERE id=?').run('cancelled',tid);db.prepare('UPDATE private_servers SET in_use=0,trade_id=NULL WHERE trade_id=?').run(tid);return interaction.editReply(`❌ Trade **#${tid}** annulé.`);}
 
-  // ── DUEL ──
   if (customId.startsWith('duel_accept_')) {
     await interaction.deferReply();
     const duelId=parseInt(customId.replace('duel_accept_',''));
@@ -2494,7 +2446,12 @@ client.on(Events.InteractionCreate, async interaction=>{
   if (interaction.isChatInputCommand()) {
     const cmd=client.commands.get(interaction.commandName);if(!cmd)return;
     try{await cmd.execute(interaction);}
-    catch(err){console.error(`[CMD] ${interaction.commandName}:`,err);const r={content:'❌ Erreur interne.',ephemeral:true};if(interaction.deferred||interaction.replied)await interaction.editReply(r).catch(()=>{});else await interaction.reply(r).catch(()={});}
+    catch(err){
+      console.error(`[CMD] ${interaction.commandName}:`,err);
+      const r={content:'❌ Erreur interne.',ephemeral:true};
+      if(interaction.deferred||interaction.replied) await interaction.editReply(r).catch(()=>{});
+      else await interaction.reply(r).catch(()=>{});
+    }
     return;
   }
   if (interaction.isButton()){try{await handleButton(interaction);}catch(e){console.error('[BTN]',e.message);}return;}
@@ -2509,7 +2466,6 @@ client.on(Events.MessageCreate, async message=>{
   if (wasBlocked) return;
   const uid=message.author.id,now=Date.now();
 
-  // XP & coins par message
   const cfg=getConfig(message.guild?.id);
   if (!msgCooldowns.has(uid)||now-msgCooldowns.get(uid)>=60000) {
     msgCooldowns.set(uid,now);
@@ -2524,7 +2480,6 @@ client.on(Events.MessageCreate, async message=>{
     }
   }
 
-  // Commandes vocaux privés
   if (message.content.startsWith('!')) {
     const pv=db.prepare('SELECT * FROM private_vocals WHERE owner_id=?').get(uid);if(!pv)return;
     const pvCh=message.guild?.channels.cache.get(pv.channel_id);if(!pvCh)return;
@@ -2532,12 +2487,19 @@ client.on(Events.MessageCreate, async message=>{
     if(cmd==='open'){await pvCh.permissionOverwrites.edit(message.guild.id,{Connect:true}).catch(()=>{});await message.reply(`✅ Vocal **${pvCh.name}** ouvert.`);}
     else if(cmd==='close'){await pvCh.permissionOverwrites.edit(message.guild.id,{Connect:false}).catch(()=>{});await message.reply(`🔒 Vocal **${pvCh.name}** fermé.`);}
     else if(cmd==='add'){const mention=message.mentions.members?.first();if(!mention)return message.reply('❌ Mentionne un membre.');await pvCh.permissionOverwrites.edit(mention.id,{Connect:true}).catch(()=>{});await message.reply(`✅ <@${mention.id}> peut rejoindre.`);}
-    else if(cmd==='kick'){const mention=message.mentions.members?.first();if(!mention)return message.reply('❌ Mentionne un membre.');if(mention.voice.channelId===pv.channel_id){const fb=message.guild.channels.cache.find(c=>c.type===ChannelType.GuildVoice&&!db.prepare('SELECT * FROM private_vocals WHERE channel_id=?').get(c.id)&&!c.name.toLowerCase().includes('afk'));if(fb)await mention.voice.setChannel(fb).catch(()=>{});else await mention.voice.disconnect().catch(()={});}await pvCh.permissionOverwrites.delete(mention.id).catch(()=>{});await message.reply(`✅ <@${mention.id}> expulsé.`);}
+    else if(cmd==='kick'){
+      const mention=message.mentions.members?.first();if(!mention)return message.reply('❌ Mentionne un membre.');
+      if(mention.voice.channelId===pv.channel_id){
+        const fb=message.guild.channels.cache.find(c=>c.type===ChannelType.GuildVoice&&!db.prepare('SELECT * FROM private_vocals WHERE channel_id=?').get(c.id)&&!c.name.toLowerCase().includes('afk'));
+        if(fb)await mention.voice.setChannel(fb).catch(()=>{});
+        else await mention.voice.disconnect().catch(()=>{});
+      }
+      await pvCh.permissionOverwrites.delete(mention.id).catch(()=>{});await message.reply(`✅ <@${mention.id}> expulsé.`);
+    }
     else if(cmd==='rename'){const newName=args.slice(1).join(' ');if(!newName)return message.reply('❌ Donne un nom.');await pvCh.setName(newName.slice(0,32)).catch(()=>{});await message.reply(`✅ Vocal renommé **${newName}**.`);}
     return;
   }
 
-  // Screenshot trade
   if (!message.channel.isThread()) return;
   const trade=db.prepare('SELECT * FROM trades WHERE thread_id=? AND status=?').get(message.channel.id,'in_progress');if(!trade)return;
   const attachment=message.attachments.find(a=>a.contentType?.startsWith('image/')||/\.(jpg|jpeg|png|webp)$/i.test(a.name??''));
@@ -2565,12 +2527,10 @@ client.on(Events.VoiceStateUpdate, async(old,neu)=>{
   const uid=neu.id||old.id,guild=neu.guild||old.guild;
   const cfg=getConfig(guild.id);
 
-  // Rejoindre un vocal
   if (!old.channelId&&neu.channelId) {
     if (!isIdleChannel(neu.channel)) db.prepare(`INSERT OR REPLACE INTO vocal_sessions (discord_id,joined_at) VALUES (?,strftime('%s','now'))`).run(uid);
   }
 
-  // Quitter un vocal
   if (old.channelId&&!neu.channelId) {
     if (!isIdleChannel(old.channel)) {
       const s=db.prepare('SELECT * FROM vocal_sessions WHERE discord_id=?').get(uid);
@@ -2584,14 +2544,12 @@ client.on(Events.VoiceStateUpdate, async(old,neu)=>{
         db.prepare('DELETE FROM vocal_sessions WHERE discord_id=?').run(uid);
       }
     }
-    // Supprimer vocal privé vide
     if (old.channel) {
       const pv=db.prepare('SELECT * FROM private_vocals WHERE channel_id=?').get(old.channelId);
-      if (pv&&old.channel.members.size===0){db.prepare('DELETE FROM private_vocals WHERE channel_id=?').run(old.channelId);await old.channel.delete('Vocal privé vide').catch(()={});}
+      if (pv&&old.channel.members.size===0){db.prepare('DELETE FROM private_vocals WHERE channel_id=?').run(old.channelId);await old.channel.delete('Vocal privé vide').catch(()=>{});}
     }
   }
 
-  // Changer de vocal
   if (old.channelId&&neu.channelId&&old.channelId!==neu.channelId) {
     if (!isIdleChannel(old.channel)) {
       const s=db.prepare('SELECT * FROM vocal_sessions WHERE discord_id=?').get(uid);
@@ -2649,7 +2607,6 @@ client.once(Events.ClientReady, async()=>{
   startYoutubeWatcher(client);
   await fetchMM2Values();
 
-  // ── CRONS ──
   cron.schedule('0 * * * *', fetchMM2Values);
   cron.schedule('*/10 * * * *', async()=>{
     for(const[,gld] of client.guilds.cache){
@@ -2669,7 +2626,6 @@ client.once(Events.ClientReady, async()=>{
     await updateLeaderboards(gld);
   }
 
-  // Reprendre giveaways actifs
   const activeGiveaways = db.prepare('SELECT * FROM giveaways WHERE status=?').all('active');
   for(const gw of activeGiveaways){
     const remaining=(gw.ends_at*1000)-Date.now();
