@@ -1,6 +1,6 @@
 {
   "name": "wenzy-bot",
-  "version": "3.0.0",
+  "version": "8.0.0",
   "description": "Wenzy MM2 Trading Discord Bot — single file",
   "main": "bot.js",
   "scripts": {
@@ -12,7 +12,8 @@
     "axios": "^1.6.7",
     "dotenv": "^16.4.1",
     "better-sqlite3": "^9.4.3",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "@napi-rs/canvas": "^0.1.44"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"
