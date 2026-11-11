@@ -1027,10 +1027,12 @@ async function addXp(guild, discordId, amount) {
         const discordUser = await guild.client.users.fetch(discordId).catch(()=>null);
         const imgBuffer = discordUser ? await buildLevelUpImage(discordUser, oldTier, newTier, after.xp) : null;
         if (imgBuffer) {
+          const lvlEmbed = xpLevelUpEmbed(discordId, oldTier, newTier);
+          lvlEmbed.setImage('attachment://levelup.png');
           await lvlCh.send({
-            content:`<@${discordId}>`,
-            embeds:[xpLevelUpEmbed(discordId, oldTier, newTier)],
-            files:[{attachment: imgBuffer, name:'levelup.png'}],
+            content: `<@${discordId}>`,
+            embeds: [lvlEmbed],
+            files: [{ attachment: imgBuffer, name: 'levelup.png' }],
           }).catch(()=>{});
         } else {
           await lvlCh.send({content:`<@${discordId}>`, embeds:[xpLevelUpEmbed(discordId, oldTier, newTier)]}).catch(()=>{});
@@ -1585,8 +1587,11 @@ const commands = [
         {
           name: '📊 STATISTIQUES',
           chs: [
-            { name:'🛬 Arrivés: 0',  voice:true },
-            { name:'🛫 Départs: 0',  voice:true },
+            { name:'🛬 Arrivés: 0',    voice:true },
+            { name:'🛫 Départs: 0',    voice:true },
+            { name:'✅ Vérifiés: 0',   voice:true },
+            { name:'🗡️ Trades: 0',     voice:true },
+            { name:'🪙 Coins: 0',      voice:true },
           ]
         },
         {
@@ -2193,6 +2198,7 @@ const commands = [
         .addStringOption(o=>o.setName('nom').setDescription('Nom de la catégorie').setRequired(false)))
       .addSubcommand(s=>s.setName('roles').setDescription('🏷️ Synchroniser les rôles des membres vérifiés'))
       .addSubcommand(s=>s.setName('stats').setDescription('📊 Statistiques du serveur'))
+      .addSubcommand(s=>s.setName('stats-setup').setDescription('📊 Créer/réparer les salons vocaux STATISTIQUES'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     async execute(interaction) {
       await interaction.deferReply({ ephemeral: true });
@@ -2395,6 +2401,54 @@ const commands = [
         return interaction.editReply('✅ Rôles synchronisés !');
       }
 
+      if (sub === 'stats-setup') {
+        const guild = interaction.guild;
+        const totalMembers = guild.memberCount;
+        const verifiedCount = db.prepare('SELECT COUNT(*) as c FROM users WHERE verified=1').get()?.c ?? 0;
+        const tradesCount = db.prepare('SELECT COUNT(*) as c FROM trades WHERE status=?').get('completed')?.c ?? 0;
+        const totalCoins = db.prepare('SELECT COALESCE(SUM(coins),0) as c FROM users').get()?.c ?? 0;
+
+        const statsDef = [
+          { find: 'arrivés',  name: `🛬 Arrivés: ${totalMembers}` },
+          { find: 'départs',  name: `🛫 Départs: 0` },
+          { find: 'vérifiés', name: `✅ Vérifiés: ${verifiedCount}` },
+          { find: 'trades',   name: `🗡️ Trades: ${tradesCount}` },
+          { find: 'coins',    name: `🪙 Coins: ${totalCoins.toLocaleString('fr-FR')}` },
+        ];
+
+        // Trouver la catégorie STATISTIQUES existante ou en créer une
+        let statCat = guild.channels.cache.find(c =>
+          c.type === ChannelType.GuildCategory && c.name.toUpperCase().includes('STATISTIQUES')
+        );
+        if (!statCat) {
+          statCat = await guild.channels.create({
+            name: '📊 STATISTIQUES',
+            type: ChannelType.GuildCategory,
+            permissionOverwrites: [{ id: guild.id, deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect] }],
+          }).catch(() => null);
+        }
+
+        let created = 0, updated = 0;
+        for (const s of statsDef) {
+          const existing = guild.channels.cache.find(c =>
+            c.name.toLowerCase().includes(s.find.toLowerCase()) && c.type === ChannelType.GuildVoice
+          );
+          if (existing) {
+            await existing.setName(s.name).catch(() => {});
+            updated++;
+          } else {
+            await guild.channels.create({
+              name: s.name,
+              type: ChannelType.GuildVoice,
+              parent: statCat?.id,
+              permissionOverwrites: [{ id: guild.id, deny: [PermissionFlagsBits.Connect] }],
+            }).catch(() => {});
+            created++;
+          }
+        }
+        return interaction.editReply(`✅ Stats-channels prêts !\n🆕 Créés : **${created}** | 🔄 Mis à jour : **${updated}**\nIls se rafraîchissent automatiquement toutes les 10 min.`);
+      }
+
       if (sub === 'stats') {
         const totalMembers = interaction.guild.memberCount;
         const verified = db.prepare('SELECT COUNT(*) as c FROM users WHERE verified=1').get()?.c??0;
@@ -2469,29 +2523,38 @@ const commands = [
       const bar = xpProgressBar(xp, 20);
       const pct = nextTier ? Math.round((xp-currentTier.xp)/(nextTier.xp-currentTier.xp)*100) : 100;
 
-      const embed = new EmbedBuilder()
-        .setColor(currentTier.color)
-        .setAuthor({name:`${currentTier.emoji} Niveau — ${target.username}`, iconURL:target.displayAvatarURL()})
-        .setThumbnail(target.displayAvatarURL({size:256}))
-        .addFields(
-          {name:`${currentTier.emoji} Niveau actuel`,value:`**${currentTier.name}**`,inline:true},
-          {name:'✨ XP total',value:`**${xp.toLocaleString('fr-FR')} XP**`,inline:true},
-          {name:'🔥 Streak daily',value:`**${userData?.daily_streak??0} jours**`,inline:true},
-          {name:'📊 Progression',value:`\`\`\`\n[${bar}] ${pct}%\n\`\`\`${nextTier?`${xp.toLocaleString('fr-FR')} / ${nextTier.xp.toLocaleString('fr-FR')} XP → **${nextTier.name}**`:'🏆 **Niveau maximum atteint !**'}`,inline:false},
-          {name:'🗡️ Trades',value:`**${userData?.trade_count??0}**`,inline:true},
-          {name:'💬 Vouches',value:`**${userData?.vouch_count??0}**`,inline:true},
-          {name:'🪙 Pièces',value:`**${(userData?.coins??0).toLocaleString('fr-FR')} 🪙**`,inline:true},
-        )
-        .setFooter({text:'Wenzy Bot v7.5 • Système XP'})
-        .setTimestamp();
-
       // Canvas image — carte de stats complète
       let files = [];
+      let imgBuffer = null;
       try {
-        const userData = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
-        const imgBuffer = await buildProfileImage(target, userData);
+        imgBuffer = await buildProfileImage(target, userData);
         if (imgBuffer) files = [{ attachment: imgBuffer, name: 'level.png' }];
       } catch {}
+
+      // Embed : image canvas en grand si dispo, sinon fallback texte
+      const embed = new EmbedBuilder()
+        .setColor(currentTier.color)
+        .setAuthor({ name: `${currentTier.emoji} Niveau — ${target.username}`, iconURL: target.displayAvatarURL() })
+        .setFooter({ text: 'Wenzy Bot v8.0 • Système XP' })
+        .setTimestamp();
+
+      if (imgBuffer) {
+        // L'image canvas porte toute l'info — embed minimaliste
+        embed.setImage('attachment://level.png');
+      } else {
+        // Fallback texte si canvas absent
+        embed
+          .setThumbnail(target.displayAvatarURL({ size: 256 }))
+          .addFields(
+            { name: `${currentTier.emoji} Niveau`, value: `**${currentTier.name}**`, inline: true },
+            { name: '✨ XP', value: `**${xp.toLocaleString('fr-FR')}**`, inline: true },
+            { name: '🔥 Streak', value: `**${userData?.daily_streak ?? 0}j**`, inline: true },
+            { name: '📊 Progression', value: `\`[${bar}] ${pct}%\`\n${nextTier ? `→ **${nextTier.name}** à ${nextTier.xp} XP` : '🏆 MAX'}`, inline: false },
+            { name: '🗡️ Trades', value: `**${userData?.trade_count ?? 0}**`, inline: true },
+            { name: '💬 Vouches', value: `**${userData?.vouch_count ?? 0}**`, inline: true },
+            { name: '🪙 Pièces', value: `**${(userData?.coins ?? 0).toLocaleString('fr-FR')}**`, inline: true },
+          );
+      }
 
       await interaction.editReply({ embeds: [embed], files });
     }
