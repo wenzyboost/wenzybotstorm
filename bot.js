@@ -854,11 +854,27 @@ async function updateStatChannels(guild) {
   const totalMembers = guild.memberCount;
   const verifiedCount = db.prepare('SELECT COUNT(*) as c FROM users WHERE verified=1').get()?.c??0;
   const tradesCount = db.prepare('SELECT COUNT(*) as c FROM trades WHERE status=?').get('completed')?.c??0;
+
+  // Coins en circulation = somme de tous les coins des users
+  const totalCoins = db.prepare('SELECT COALESCE(SUM(coins),0) as c FROM users').get()?.c??0;
+
+  // Vocaux lockés = channels vocaux avec Connect:false pour @everyone
+  let lockedVocals = 0;
+  for (const [, ch] of guild.channels.cache) {
+    if (ch.type !== ChannelType.GuildVoice) continue;
+    const overwrite = ch.permissionOverwrites.cache.get(guild.id);
+    if (overwrite && overwrite.deny.has(PermissionFlagsBits.Connect)) lockedVocals++;
+  }
+
   const stats = [
-    {find:'arrivés',name:`🛬 Arrivés: ${totalMembers}`},
-    {find:'membres',name:`👥 Membres: ${totalMembers}`},
-    {find:'vérifiés',name:`✅ Vérifiés: ${verifiedCount}`},
-    {find:'trades',name:`🗡️ Trades: ${tradesCount}`},
+    {find:'arrivés',   name:`🛬 Arrivés: ${totalMembers}`},
+    {find:'membres',   name:`👥 Membres: ${totalMembers}`},
+    {find:'vérifiés',  name:`✅ Vérifiés: ${verifiedCount}`},
+    {find:'trades',    name:`🗡️ Trades: ${tradesCount}`},
+    {find:'coins',     name:`🪙 Coins: ${totalCoins.toLocaleString('fr-FR')}`},
+    {find:'lockés',    name:`🔒 Lockés: ${lockedVocals}`},
+    {find:'locked',    name:`🔒 Lockés: ${lockedVocals}`},
+    {find:'départs',   name:`🛫 Départs: 0`}, // reste à 0, Discord ne track pas ça nativement sans event
   ];
   for(const s of stats){
     const ch = guild.channels.cache.find(c=>c.name.toLowerCase().includes(s.find.toLowerCase())&&c.type===ChannelType.GuildVoice);
@@ -899,6 +915,9 @@ async function doVerify(interaction) {
     .setAuthor({name:'✅ Vérification Roblox'})
     .addFields({name:'👤 Discord',value:`<@${did}>`,inline:true},{name:'🎮 Roblox',value:user.roblox_username,inline:true})
     .setTimestamp());
+
+  // Mise à jour immédiate du compteur ✅ Vérifiés dans les stat-channels
+  await updateStatChannels(interaction.guild).catch(()=>{});
 }
 
 async function postTrade(interaction, did, offreStr, chercheStr, manualOfferVal, manualWantVal) {
