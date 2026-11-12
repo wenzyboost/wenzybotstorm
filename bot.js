@@ -1520,85 +1520,46 @@ const commands = [
         } catch {}
       };
 
-      // ── NETTOYAGE SALONS ──
-      log.push('🧹 Nettoyage des salons...');
-      await updateProgress('🧹 Suppression des salons existants...\n_Le salon de commande va disparaître, c\'est normal._');
-      const chToDelete = [...guild.channels.cache.values()];
-      await Promise.allSettled(chToDelete.map(ch => ch.delete('wenzy-setup reset')));
-      log.push(`✅ ${chToDelete.length} salons supprimés`);
+      // ── HELPER : séquentiel avec retry sur 429 ──────────────────
+      const seq = async (fn) => {
+        while (true) {
+          try { return await fn(); }
+          catch (e) {
+            const retry = e?.rawError?.retry_after ?? e?.retryAfter;
+            if (retry) { await new Promise(r => setTimeout(r, (retry * 1000) + 500)); }
+            else { throw e; }
+          }
+        }
+      };
 
-      // ── NETTOYAGE ROLES (sauf @everyone et rôles du bot) ──
-      log.push('🧹 Nettoyage des rôles...');
-      await updateProgress('🧹 Suppression des rôles existants...');
+      // ═══════════════════════════════════════════════════════════
+      // ÉTAPE 1 — NETTOYAGE SALONS
+      // ═══════════════════════════════════════════════════════════
+      await updateProgress('🧹 **Étape 1/4** — Suppression des salons...\n_Le salon de commande va disparaître, c\'est normal._');
+      const chToDelete = [...guild.channels.cache.values()];
+      for (const ch of chToDelete) {
+        await seq(() => ch.delete('wenzy-setup reset')).catch(() => {});
+      }
+      log.push(`✅ Salons supprimés`);
+
+      // ═══════════════════════════════════════════════════════════
+      // ÉTAPE 2 — NETTOYAGE RÔLES
+      // ═══════════════════════════════════════════════════════════
+      await updateProgress('🧹 **Étape 2/4** — Suppression des rôles...');
       const botMember = guild.members.me;
       const botHighestPos = botMember?.roles.highest.position ?? 0;
-      const rolesToDelete = guild.roles.cache.filter(role =>
-        role.id !== guild.id && !role.managed && role.position < botHighestPos
-      );
-      await Promise.allSettled([...rolesToDelete.values()].map(r => r.delete('wenzy-setup reset')));
-      log.push(`✅ ${rolesToDelete.size} rôles supprimés`);
-
-      // ── CREATION DES ROLES ──
-      const roleDefs = [
-        { name:'Wenzy',               color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Madame Wenzy',        color:0xFF69B4, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Squidd',              color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Owners',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Co-Owners',           color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Superviseur Staff',   color:0xF39C12, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Chef Admins',         color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Admins',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Admins Test',         color:0xE67E22, hoist:false, perms:[PermissionFlagsBits.ModerateMembers] },
-        { name:'Chef Modérateurs',    color:0x3498DB, hoist:true,  perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages,PermissionFlagsBits.KickMembers] },
-        { name:'Capitaine Modérateurs',color:0x3498DB,hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Haut Modérateurs',    color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Modérateurs',         color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Modérateur Test',     color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
-        { name:'Staff',               color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
-        { name:'Amis',                color:0xE91E8C, hoist:true,  perms:[] },
-        { name:'Contents Creators',   color:0xFF4500, hoist:true,  perms:[] },
-        { name:'Protégés Des Owners', color:0x9B59B6, hoist:false, perms:[] },
-        { name:'Boosteurs',           color:0xFF73FA, hoist:false, perms:[] },
-        { name:'Middleman',           color:0x2ECC71, hoist:false, perms:[] },
-        { name:'Soutien | .gg/wenzymm2', color:0x5865F2, hoist:false, perms:[] },
-        { name:'Protéger de Kurai',   color:0x9B59B6, hoist:false, perms:[] },
-        { name:'50 - Goat',           color:0xF1C40F, hoist:true,  perms:[] },
-        { name:'30 - Elites',         color:0x9B59B6, hoist:false, perms:[] },
-        { name:'20 - Puants',         color:0x3498DB, hoist:false, perms:[] },
-        { name:'15 - Pipelettes',     color:0x27AE60, hoist:false, perms:[] },
-        { name:'10 - Bavards',        color:0x2ECC71, hoist:false, perms:[] },
-        { name:'5 - Débutants',       color:0x95A5A6, hoist:false, perms:[] },
-        { name:'Gingerscope',         color:0xFF6B35, hoist:false, perms:[] },
-        { name:'Traveler Axe',        color:0x8B4513, hoist:false, perms:[] },
-        { name:'Vampire Axe',         color:0xDC143C, hoist:false, perms:[] },
-        { name:'Harvester',           color:0x228B22, hoist:false, perms:[] },
-        { name:'Icepiercer',          color:0x87CEEB, hoist:false, perms:[] },
-        { name:'Heart Blade',         color:0xFF69B4, hoist:false, perms:[] },
-        { name:'Elderwood Blade',     color:0x556B2F, hoist:false, perms:[] },
-        { name:'Membres',             color:0x95A5A6, hoist:false, perms:[] },
-        { name:'Homme',               color:0x3498DB, hoist:false, perms:[] },
-        { name:'Femme',               color:0xE91E8C, hoist:false, perms:[] },
-        { name:'+18',                 color:0xFF4500, hoist:false, perms:[] },
-        { name:'-18',                 color:0x2ECC71, hoist:false, perms:[] },
-        { name:'🔇 Muet',             color:0x2C2F33, hoist:false, perms:[] },
-        { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
-      ];
-
-      await updateProgress('⚙️ Création des rôles...');
-      const cr = {};
-      let roleCount = 0;
-      for(const rd of roleDefs){
-        try {
-          const p = rd.perms.length>0?rd.perms.reduce((a,b)=>a|b,0n):0n;
-          cr[rd.name]=await guild.roles.create({name:rd.name,color:rd.color,hoist:rd.hoist,permissions:p});
-          log.push(`✅ Rôle: ${rd.name}`);
-          roleCount++;
-        } catch(e){ log.push(`⚠️ Rôle ${rd.name}: ${e.message}`); }
+      const rolesToDelete = [...guild.roles.cache.filter(r =>
+        r.id !== guild.id && !r.managed && r.position < botHighestPos
+      ).values()];
+      for (const role of rolesToDelete) {
+        await seq(() => role.delete('wenzy-setup reset')).catch(() => {});
       }
-      log.push(`📊 ${roleCount}/${roleDefs.length} rôles créés`);
+      log.push(`✅ Rôles supprimés`);
 
-      const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
-      const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]).filter(Boolean);
+      // ═══════════════════════════════════════════════════════════
+      // ÉTAPE 3 — CRÉATION SALONS (sans perms rôles pour l'instant)
+      // ═══════════════════════════════════════════════════════════
+      await updateProgress('🏗️ **Étape 3/4** — Création des salons...');
       const everyone = guild.id;
 
       const catDefs = [
@@ -1735,14 +1696,20 @@ const commands = [
         },
       ];
 
-      await updateProgress('🏗️ Création des catégories et salons...\n_Ça peut prendre 1-2 minutes, discord.js gère les rate limits automatiquement._');
+      // Création salons SANS perms rôles (les rôles n'existent pas encore)
+      // Les perms staff/readonly seront appliquées à l'étape 4 après création des rôles.
       const cm = {};
+      // On garde la définition du type de chaque salon pour l'étape 4
+      const chTypeMeta = {};
       let catCount = 0, chCount = 0;
+
       for(const cd of catDefs){
         let cat;
         try {
-          const catPow = [{id:everyone,allow:[PermissionFlagsBits.ViewChannel]}];
-          cat = await guild.channels.create({name:cd.name,type:ChannelType.GuildCategory,permissionOverwrites:catPow});
+          cat = await seq(() => guild.channels.create({
+            name: cd.name,
+            type: ChannelType.GuildCategory,
+          }));
           log.push(`📁 ${cd.name}`);
           catCount++;
         } catch(e) {
@@ -1752,24 +1719,12 @@ const commands = [
 
         for(const ch of cd.chs){
           try {
-            const cpows = [];
-            if(ch.staff){
-              cpows.push({id:everyone,deny:[PermissionFlagsBits.ViewChannel]});
-              for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]});
-            } else if(ch.readonly||ch.ticketEmbed||ch.welcomeEmbed||ch.gameEmbed){
-              cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]});
-              for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.SendMessages]});
-            } else if(ch.voice||ch.createPv){
-              // vocal — pas de perm override
-            } else {
-              cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel]});
-            }
-            cm[ch.name] = await guild.channels.create({
-              name:ch.name,
-              type:ch.voice?ChannelType.GuildVoice:ChannelType.GuildText,
-              parent:cat.id,
-              permissionOverwrites:cpows.length?cpows:undefined,
-            });
+            cm[ch.name] = await seq(() => guild.channels.create({
+              name: ch.name,
+              type: ch.voice ? ChannelType.GuildVoice : ChannelType.GuildText,
+              parent: cat.id,
+            }));
+            chTypeMeta[ch.name] = { staff: ch.staff, readonly: ch.readonly, ticketEmbed: ch.ticketEmbed, welcomeEmbed: ch.welcomeEmbed, gameEmbed: ch.gameEmbed, voice: ch.voice };
             log.push(`  ✅ ${ch.name}`);
             chCount++;
           } catch(e) {
@@ -1777,10 +1732,99 @@ const commands = [
           }
         }
 
-        // Update progress via webhook (survit à la suppression du salon)
-        await updateProgress(`🏗️ Catégories : **${catCount}** · Salons : **${chCount}**\nDernière catégorie : **${cd.name}**`);
+        await updateProgress(`🏗️ **Étape 3/4** — Salons\nCatégories : **${catCount}** · Salons : **${chCount}**\nEn cours : **${cd.name}**`);
       }
       log.push(`📊 ${catCount} catégories · ${chCount} salons créés`);
+
+      // ═══════════════════════════════════════════════════════════
+      // ÉTAPE 4 — CRÉATION RÔLES + APPLICATION PERMS
+      // ═══════════════════════════════════════════════════════════
+      await updateProgress('⚙️ **Étape 4/4** — Création des rôles...');
+
+      const roleDefs = [
+        { name:'Wenzy',               color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Madame Wenzy',        color:0xFF69B4, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Squidd',              color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Owners',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Co-Owners',           color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Superviseur Staff',   color:0xF39C12, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Chef Admins',         color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Admins',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Admins Test',         color:0xE67E22, hoist:false, perms:[PermissionFlagsBits.ModerateMembers] },
+        { name:'Chef Modérateurs',    color:0x3498DB, hoist:true,  perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages,PermissionFlagsBits.KickMembers] },
+        { name:'Capitaine Modérateurs',color:0x3498DB,hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
+        { name:'Haut Modérateurs',    color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
+        { name:'Modérateurs',         color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
+        { name:'Modérateur Test',     color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
+        { name:'Staff',               color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
+        { name:'Amis',                color:0xE91E8C, hoist:true,  perms:[] },
+        { name:'Contents Creators',   color:0xFF4500, hoist:true,  perms:[] },
+        { name:'Protégés Des Owners', color:0x9B59B6, hoist:false, perms:[] },
+        { name:'Boosteurs',           color:0xFF73FA, hoist:false, perms:[] },
+        { name:'Middleman',           color:0x2ECC71, hoist:false, perms:[] },
+        { name:'Soutien | .gg/wenzymm2', color:0x5865F2, hoist:false, perms:[] },
+        { name:'Protéger de Kurai',   color:0x9B59B6, hoist:false, perms:[] },
+        { name:'50 - Goat',           color:0xF1C40F, hoist:true,  perms:[] },
+        { name:'30 - Elites',         color:0x9B59B6, hoist:false, perms:[] },
+        { name:'20 - Puants',         color:0x3498DB, hoist:false, perms:[] },
+        { name:'15 - Pipelettes',     color:0x27AE60, hoist:false, perms:[] },
+        { name:'10 - Bavards',        color:0x2ECC71, hoist:false, perms:[] },
+        { name:'5 - Débutants',       color:0x95A5A6, hoist:false, perms:[] },
+        { name:'Gingerscope',         color:0xFF6B35, hoist:false, perms:[] },
+        { name:'Traveler Axe',        color:0x8B4513, hoist:false, perms:[] },
+        { name:'Vampire Axe',         color:0xDC143C, hoist:false, perms:[] },
+        { name:'Harvester',           color:0x228B22, hoist:false, perms:[] },
+        { name:'Icepiercer',          color:0x87CEEB, hoist:false, perms:[] },
+        { name:'Heart Blade',         color:0xFF69B4, hoist:false, perms:[] },
+        { name:'Elderwood Blade',     color:0x556B2F, hoist:false, perms:[] },
+        { name:'Membres',             color:0x95A5A6, hoist:false, perms:[] },
+        { name:'Homme',               color:0x3498DB, hoist:false, perms:[] },
+        { name:'Femme',               color:0xE91E8C, hoist:false, perms:[] },
+        { name:'+18',                 color:0xFF4500, hoist:false, perms:[] },
+        { name:'-18',                 color:0x2ECC71, hoist:false, perms:[] },
+        { name:'🔇 Muet',             color:0x2C2F33, hoist:false, perms:[] },
+        { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
+      ];
+
+      const cr = {};
+      let roleCount = 0;
+      for(const rd of roleDefs){
+        try {
+          const p = rd.perms.length > 0 ? rd.perms.reduce((a,b) => a|b, 0n) : 0n;
+          cr[rd.name] = await seq(() => guild.roles.create({name:rd.name,color:rd.color,hoist:rd.hoist,permissions:p}));
+          log.push(`✅ Rôle: ${rd.name}`);
+          roleCount++;
+        } catch(e) { log.push(`⚠️ Rôle ${rd.name}: ${e.message}`); }
+      }
+      log.push(`📊 ${roleCount}/${roleDefs.length} rôles créés`);
+
+      // ── APPLIQUER PERMS SUR LES SALONS MAINTENANT QUE LES RÔLES EXISTENT ──
+      await updateProgress('🔐 Application des permissions sur les salons...');
+      const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
+      const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]??guild.roles.cache.find(r=>r.name===n)).filter(Boolean);
+
+      for(const [chName, ch] of Object.entries(cm)){
+        if (!ch) continue;
+        const meta = chTypeMeta[chName] ?? {};
+        try {
+          if(meta.staff){
+            await seq(() => ch.permissionOverwrites.set([
+              {id:everyone, deny:[PermissionFlagsBits.ViewChannel]},
+              ...modRoles.map(r=>({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]})),
+            ]));
+          } else if(meta.readonly||meta.ticketEmbed||meta.welcomeEmbed||meta.gameEmbed){
+            await seq(() => ch.permissionOverwrites.set([
+              {id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]},
+              ...modRoles.map(r=>({id:r.id,allow:[PermissionFlagsBits.SendMessages]})),
+            ]));
+          } else if(!meta.voice){
+            await seq(() => ch.permissionOverwrites.set([
+              {id:everyone,allow:[PermissionFlagsBits.ViewChannel]},
+            ]));
+          }
+        } catch(e) { log.push(`⚠️ Perms ${chName}: ${e.message}`); }
+      }
+      log.push('✅ Permissions appliquées');
 
       db.prepare('INSERT OR REPLACE INTO automod_config (guild_id,block_links,anti_spam,anti_caps,anti_raid,max_warns_mute,max_warns_kick) VALUES (?,1,1,1,1,3,5)').run(guild.id);
       db.prepare('INSERT OR REPLACE INTO server_config (guild_id) VALUES (?)').run(guild.id);
