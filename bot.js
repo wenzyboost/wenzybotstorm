@@ -1500,25 +1500,36 @@ const commands = [
       await interaction.deferReply({ ephemeral: true });
       const guild = interaction.guild, log = [];
 
+      // Helper progress update
+      const updateProgress = async (msg) => {
+        try { await interaction.editReply({ embeds:[new EmbedBuilder().setColor(C.warning).setAuthor({name:'⏳ Setup en cours...'}).setDescription(msg).setTimestamp()] }); } catch {}
+      };
+
       // ── NETTOYAGE SALONS ──
       log.push('🧹 Nettoyage des salons...');
-      for(const ch of guild.channels.cache.values()){
+      await updateProgress('🧹 Suppression des salons existants...');
+      const chToDelete = [...guild.channels.cache.values()];
+      for(const ch of chToDelete){
         await ch.delete('wenzy-setup reset').catch(()=>{});
+        await new Promise(r=>setTimeout(r,300));
       }
       await new Promise(r=>setTimeout(r,2000));
+      log.push(`✅ ${chToDelete.length} salons supprimés`);
 
       // ── NETTOYAGE ROLES (sauf @everyone et rôles du bot) ──
       log.push('🧹 Nettoyage des rôles...');
+      await updateProgress('🧹 Suppression des rôles existants...');
       const botMember = guild.members.me;
       const botHighestPos = botMember?.roles.highest.position ?? 0;
-      for(const role of guild.roles.cache.values()){
-        if (role.id === guild.id) continue; // @everyone
-        if (role.managed) continue; // rôles gérés (bots)
-        if (role.position >= botHighestPos) continue; // rôles plus hauts que le bot
+      const rolesToDelete = guild.roles.cache.filter(role =>
+        role.id !== guild.id && !role.managed && role.position < botHighestPos
+      );
+      for(const role of rolesToDelete.values()){
         await role.delete('wenzy-setup reset').catch(()=>{});
+        await new Promise(r=>setTimeout(r,300));
       }
       await new Promise(r=>setTimeout(r,2000));
-      log.push('✅ Rôles supprimés');
+      log.push(`✅ ${rolesToDelete.size} rôles supprimés`);
 
       // ── CREATION DES ROLES ──
       const roleDefs = [
@@ -1566,14 +1577,23 @@ const commands = [
         { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
       ];
 
+      // Helper : pause configurable pour éviter les rate limits Discord
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
       const cr = {};
+      let roleCount = 0;
       for(const rd of roleDefs){
         try {
           const p = rd.perms.length>0?rd.perms.reduce((a,b)=>a|b,0n):0n;
           cr[rd.name]=await guild.roles.create({name:rd.name,color:rd.color,hoist:rd.hoist,permissions:p});
           log.push(`✅ Rôle: ${rd.name}`);
+          roleCount++;
+          // Discord rate-limit : 1 rôle toutes les 250ms max
+          await wait(300);
         } catch(e){ log.push(`⚠️ Rôle ${rd.name}: ${e.message}`); }
       }
+      log.push(`📊 ${roleCount}/${roleDefs.length} rôles créés`);
+      await wait(1500);
 
       const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
       const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]).filter(Boolean);
@@ -1714,35 +1734,61 @@ const commands = [
       ];
 
       const cm = {};
+      let catCount = 0, chCount = 0;
       for(const cd of catDefs){
-        const catPow = [
-          {id:everyone,allow:[PermissionFlagsBits.ViewChannel]},
-        ];
-        const cat = await guild.channels.create({name:cd.name,type:ChannelType.GuildCategory,permissionOverwrites:catPow});
-        log.push(`📁 ${cd.name}`);
+        let cat;
+        try {
+          const catPow = [
+            {id:everyone,allow:[PermissionFlagsBits.ViewChannel]},
+          ];
+          cat = await guild.channels.create({name:cd.name,type:ChannelType.GuildCategory,permissionOverwrites:catPow});
+          log.push(`📁 ${cd.name}`);
+          catCount++;
+          await wait(400);
+        } catch(e) {
+          log.push(`❌ Catégorie ${cd.name}: ${e.message}`);
+          continue;
+        }
 
         for(const ch of cd.chs){
-          const cpows = [];
-          if(ch.staff){
-            cpows.push({id:everyone,deny:[PermissionFlagsBits.ViewChannel]});
-            for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]});
-          } else if(ch.readonly||ch.ticketEmbed||ch.welcomeEmbed||ch.gameEmbed){
-            cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]});
-            for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.SendMessages]});
-          } else if(ch.voice||ch.createPv){
-            // vocal
-          } else {
-            cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel]});
+          try {
+            const cpows = [];
+            if(ch.staff){
+              cpows.push({id:everyone,deny:[PermissionFlagsBits.ViewChannel]});
+              for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]});
+            } else if(ch.readonly||ch.ticketEmbed||ch.welcomeEmbed||ch.gameEmbed){
+              cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]});
+              for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.SendMessages]});
+            } else if(ch.voice||ch.createPv){
+              // vocal — pas de perm override
+            } else {
+              cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel]});
+            }
+            cm[ch.name] = await guild.channels.create({
+              name:ch.name,
+              type:ch.voice?ChannelType.GuildVoice:ChannelType.GuildText,
+              parent:cat.id,
+              permissionOverwrites:cpows.length?cpows:undefined,
+            });
+            log.push(`  ✅ ${ch.name}`);
+            chCount++;
+            await wait(350);
+          } catch(e) {
+            log.push(`  ❌ Salon ${ch.name}: ${e.message}`);
           }
-          cm[ch.name] = await guild.channels.create({
-            name:ch.name,
-            type:ch.voice?ChannelType.GuildVoice:ChannelType.GuildText,
-            parent:cat.id,
-            permissionOverwrites:cpows.length?cpows:undefined,
-          });
-          log.push(`  ✅ ${ch.name}`);
         }
+
+        // Update de progression toutes les catégories pour garder l'interaction vivante
+        try {
+          await interaction.editReply({
+            embeds:[new EmbedBuilder().setColor(C.warning)
+              .setAuthor({name:'⏳ Setup en cours...'})
+              .setDescription(`📁 Catégorie en cours : **${cd.name}**\n✅ ${catCount} catégories · ${chCount} salons créés\n\n_Ne ferme pas Discord..._`)
+              .setTimestamp()],
+          });
+        } catch {}
       }
+      log.push(`📊 ${catCount} catégories et ${chCount} salons créés`);
 
       db.prepare('INSERT OR REPLACE INTO automod_config (guild_id,block_links,anti_spam,anti_caps,anti_raid,max_warns_mute,max_warns_kick) VALUES (?,1,1,1,1,3,5)').run(guild.id);
       db.prepare('INSERT OR REPLACE INTO server_config (guild_id) VALUES (?)').run(guild.id);
