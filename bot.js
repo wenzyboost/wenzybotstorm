@@ -1500,20 +1500,31 @@ const commands = [
       await interaction.deferReply({ ephemeral: true });
       const guild = interaction.guild, log = [];
 
-      // Helper progress update
+      // ── WEBHOOK SURVIVANT ──
+      // L'interaction webhook survit même si le salon est supprimé.
+      // On utilise l'API REST directement avec le token d'interaction (valable 15 min).
+      const iRest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+      const webhookBase = `/webhooks/${interaction.applicationId}/${interaction.token}`;
+
       const updateProgress = async (msg) => {
-        try { await interaction.editReply({ embeds:[new EmbedBuilder().setColor(C.warning).setAuthor({name:'⏳ Setup en cours...'}).setDescription(msg).setTimestamp()] }); } catch {}
+        try {
+          await iRest.patch(`${webhookBase}/messages/@original`, {
+            body: { embeds: [{ color: 0xFEE75C, author: { name: '⏳ Setup en cours...' }, description: msg, timestamp: new Date().toISOString() }] }
+          });
+        } catch {}
+      };
+
+      const finalReply = async (embeds) => {
+        try {
+          await iRest.patch(`${webhookBase}/messages/@original`, { body: { embeds } });
+        } catch {}
       };
 
       // ── NETTOYAGE SALONS ──
       log.push('🧹 Nettoyage des salons...');
-      await updateProgress('🧹 Suppression des salons existants...');
+      await updateProgress('🧹 Suppression des salons existants...\n_Le salon de commande va disparaître, c\'est normal._');
       const chToDelete = [...guild.channels.cache.values()];
-      for(const ch of chToDelete){
-        await ch.delete('wenzy-setup reset').catch(()=>{});
-        await new Promise(r=>setTimeout(r,300));
-      }
-      await new Promise(r=>setTimeout(r,2000));
+      await Promise.allSettled(chToDelete.map(ch => ch.delete('wenzy-setup reset')));
       log.push(`✅ ${chToDelete.length} salons supprimés`);
 
       // ── NETTOYAGE ROLES (sauf @everyone et rôles du bot) ──
@@ -1524,11 +1535,7 @@ const commands = [
       const rolesToDelete = guild.roles.cache.filter(role =>
         role.id !== guild.id && !role.managed && role.position < botHighestPos
       );
-      for(const role of rolesToDelete.values()){
-        await role.delete('wenzy-setup reset').catch(()=>{});
-        await new Promise(r=>setTimeout(r,300));
-      }
-      await new Promise(r=>setTimeout(r,2000));
+      await Promise.allSettled([...rolesToDelete.values()].map(r => r.delete('wenzy-setup reset')));
       log.push(`✅ ${rolesToDelete.size} rôles supprimés`);
 
       // ── CREATION DES ROLES ──
@@ -1577,9 +1584,7 @@ const commands = [
         { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
       ];
 
-      // Helper : pause configurable pour éviter les rate limits Discord
-      const wait = (ms) => new Promise(r => setTimeout(r, ms));
-
+      await updateProgress('⚙️ Création des rôles...');
       const cr = {};
       let roleCount = 0;
       for(const rd of roleDefs){
@@ -1588,12 +1593,9 @@ const commands = [
           cr[rd.name]=await guild.roles.create({name:rd.name,color:rd.color,hoist:rd.hoist,permissions:p});
           log.push(`✅ Rôle: ${rd.name}`);
           roleCount++;
-          // Discord rate-limit : 1 rôle toutes les 250ms max
-          await wait(300);
         } catch(e){ log.push(`⚠️ Rôle ${rd.name}: ${e.message}`); }
       }
       log.push(`📊 ${roleCount}/${roleDefs.length} rôles créés`);
-      await wait(1500);
 
       const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
       const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]).filter(Boolean);
@@ -1733,18 +1735,16 @@ const commands = [
         },
       ];
 
+      await updateProgress('🏗️ Création des catégories et salons...\n_Ça peut prendre 1-2 minutes, discord.js gère les rate limits automatiquement._');
       const cm = {};
       let catCount = 0, chCount = 0;
       for(const cd of catDefs){
         let cat;
         try {
-          const catPow = [
-            {id:everyone,allow:[PermissionFlagsBits.ViewChannel]},
-          ];
+          const catPow = [{id:everyone,allow:[PermissionFlagsBits.ViewChannel]}];
           cat = await guild.channels.create({name:cd.name,type:ChannelType.GuildCategory,permissionOverwrites:catPow});
           log.push(`📁 ${cd.name}`);
           catCount++;
-          await wait(400);
         } catch(e) {
           log.push(`❌ Catégorie ${cd.name}: ${e.message}`);
           continue;
@@ -1772,23 +1772,15 @@ const commands = [
             });
             log.push(`  ✅ ${ch.name}`);
             chCount++;
-            await wait(350);
           } catch(e) {
             log.push(`  ❌ Salon ${ch.name}: ${e.message}`);
           }
         }
 
-        // Update de progression toutes les catégories pour garder l'interaction vivante
-        try {
-          await interaction.editReply({
-            embeds:[new EmbedBuilder().setColor(C.warning)
-              .setAuthor({name:'⏳ Setup en cours...'})
-              .setDescription(`📁 Catégorie en cours : **${cd.name}**\n✅ ${catCount} catégories · ${chCount} salons créés\n\n_Ne ferme pas Discord..._`)
-              .setTimestamp()],
-          });
-        } catch {}
+        // Update progress via webhook (survit à la suppression du salon)
+        await updateProgress(`🏗️ Catégories : **${catCount}** · Salons : **${chCount}**\nDernière catégorie : **${cd.name}**`);
       }
-      log.push(`📊 ${catCount} catégories et ${chCount} salons créés`);
+      log.push(`📊 ${catCount} catégories · ${chCount} salons créés`);
 
       db.prepare('INSERT OR REPLACE INTO automod_config (guild_id,block_links,anti_spam,anti_caps,anti_raid,max_warns_mute,max_warns_kick) VALUES (?,1,1,1,1,3,5)').run(guild.id);
       db.prepare('INSERT OR REPLACE INTO server_config (guild_id) VALUES (?)').run(guild.id);
@@ -2393,20 +2385,23 @@ const commands = [
       await updateStatChannels(guild);
       log.push('✅ Stats et leaderboards initialisés');
 
-      await interaction.editReply({
-        embeds:[new EmbedBuilder().setColor(C.success)
-          .setAuthor({name:'🏗️ Setup Wenzy v7.5 terminé !'})
-          .setDescription(log.map(l=>`\`${l}\``).join('\n').slice(0,3900))
-          .addFields({name:'📋 Prochaines étapes',value:[
+      await finalReply([{
+        color: 0x57F287,
+        author: { name: '🏗️ Setup Wenzy v8.0 terminé !' },
+        description: log.map(l=>`\`${l}\``).join('\n').slice(0,3900),
+        fields: [{
+          name: '📋 Prochaines étapes',
+          value: [
             '**1.** Donne-toi le rôle **Owners** dans la liste des rôles',
             '**2.** `/panel` → configure tickets, XP roles, YouTube, annonces...',
             '**3.** `/panel xp-roles` → configure quel rôle donner à quel seuil XP',
             '**4.** `/panel status-role` → rôle pour .gg/wenzy dans le status',
             '**5.** `/addserver <lien>` pour les serveurs privés MM2',
             '**6.** AutoMod activé par défaut — liens bloqués, anti-spam, anti-raid',
-          ].join('\n')})
-          .setTimestamp()],
-      });
+          ].join('\n'),
+        }],
+        timestamp: new Date().toISOString(),
+      }]);
     }
   },
 
