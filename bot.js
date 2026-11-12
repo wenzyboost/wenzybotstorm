@@ -2873,10 +2873,12 @@ const commands = [
       if(!hasStaffPerm(interaction.member))return interaction.editReply('❌ Réservé au staff.');
       const target=interaction.options.getUser('membre'),amount=interaction.options.getInteger('quantite'),reason=interaction.options.getString('raison')??'—';
       db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(target.id);
-      // addXp gère level-up + notif dans le salon level + rôles XP automatiquement
-      const after = await addXp(interaction.guild, target.id, amount);
-      await sendLog(interaction.guild,new EmbedBuilder().setColor(C.success).setAuthor({name:`${amount>=0?'➕':'➖'} XP modifié`}).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'✨ Modif',value:`${amount>=0?'+':''}${amount} XP`,inline:true},{name:'📊 Total',value:`${after.xp} XP — ${getXpTier(after.xp).name}`,inline:true},{name:'📝 Raison',value:reason},{name:'🛡️ Staff',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
-      await interaction.editReply(`✅ <@${target.id}> → **${amount>=0?'+':''}${amount} XP** | Total : **${after.xp} XP** — ${getXpTier(after.xp).emoji} ${getXpTier(after.xp).name}`);
+      db.prepare('UPDATE users SET xp=MAX(0,xp+?) WHERE discord_id=?').run(amount,target.id);
+      const u=db.prepare('SELECT xp FROM users WHERE discord_id=?').get(target.id);
+      const member=await interaction.guild.members.fetch(target.id).catch(()=>null);
+      if(member)await applyXpRoles(interaction.guild,member,u.xp);
+      await sendLog(interaction.guild,new EmbedBuilder().setColor(C.success).setAuthor({name:`${amount>=0?'➕':'➖'} XP modifié`}).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'✨ Modif',value:`${amount>=0?'+':''}${amount} XP`,inline:true},{name:'📊 Total',value:`${u.xp} XP — ${getXpTier(u.xp).name}`,inline:true},{name:'📝 Raison',value:reason},{name:'🛡️ Staff',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
+      await interaction.editReply(`✅ <@${target.id}> → **${amount>=0?'+':''}${amount} XP** | Total : **${u.xp} XP**`);
     }
   },
 
@@ -3028,121 +3030,6 @@ const commands = [
       const boutiqueCh=interaction.guild.channels.cache.find(c=>c.name.includes('boutique'));
       if(boutiqueCh)await postShopEmbed(boutiqueCh);
       await interaction.editReply(`✅ Item **${nom}** ajouté !`);
-    }
-  },
-
-  // ── /autorole ──────────────────────────────────────────────
-  {
-    data: new SlashCommandBuilder().setName('autorole').setDescription('🏷️ (Admin) Gérer les rôles automatiques à l\'arrivée')
-      .addSubcommand(s => s.setName('list').setDescription('📋 Voir les autoroles configurés'))
-      .addSubcommand(s => s.setName('add').setDescription('➕ Ajouter un rôle donné à l\'arrivée')
-        .addRoleOption(o => o.setName('role').setDescription('Rôle à donner').setRequired(true)))
-      .addSubcommand(s => s.setName('remove').setDescription('➖ Retirer un autorole')
-        .addRoleOption(o => o.setName('role').setDescription('Rôle à retirer').setRequired(true)))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    async execute(interaction) {
-      await interaction.deferReply({ ephemeral: true });
-      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
-      const sub = interaction.options.getSubcommand();
-      const gid = interaction.guild.id;
-      db.prepare('INSERT OR IGNORE INTO server_config (guild_id) VALUES (?)').run(gid);
-
-      // Stocke les autoroles dans server_config comme JSON (colonne dédiée ou réutilise xp_roles-style)
-      // On utilise une migration safe pour ajouter la colonne si elle n'existe pas
-      try { db.exec('ALTER TABLE server_config ADD COLUMN autoroles TEXT DEFAULT \'[]\''); } catch {}
-
-      const cfg = db.prepare('SELECT autoroles FROM server_config WHERE guild_id=?').get(gid);
-      let autoroles = [];
-      try { autoroles = JSON.parse(cfg?.autoroles || '[]'); } catch {}
-
-      if (sub === 'list') {
-        if (!autoroles.length) return interaction.editReply('Aucun autorole configuré. Utilise `/autorole add`.');
-        const lines = autoroles.map(id => {
-          const r = interaction.guild.roles.cache.get(id);
-          return r ? `• <@&${id}> (${r.name})` : `• \`${id}\` _(rôle supprimé)_`;
-        });
-        return interaction.editReply({ embeds: [new EmbedBuilder().setColor(C.info)
-          .setAuthor({ name: '🏷️ Autoroles configurés' })
-          .setDescription(lines.join('\n'))
-          .setFooter({ text: 'Ces rôles sont donnés automatiquement à chaque nouveau membre' })
-          .setTimestamp()] });
-      }
-
-      const role = interaction.options.getRole('role');
-      if (sub === 'add') {
-        if (autoroles.includes(role.id)) return interaction.editReply(`❌ <@&${role.id}> est déjà un autorole.`);
-        if (role.managed) return interaction.editReply('❌ Les rôles gérés par des intégrations ne peuvent pas être des autoroles.');
-        autoroles.push(role.id);
-        db.prepare('UPDATE server_config SET autoroles=? WHERE guild_id=?').run(JSON.stringify(autoroles), gid);
-        return interaction.editReply(`✅ <@&${role.id}> ajouté aux autoroles.\nTous les nouveaux membres le recevront automatiquement.`);
-      }
-      if (sub === 'remove') {
-        if (!autoroles.includes(role.id)) return interaction.editReply(`❌ <@&${role.id}> n'est pas un autorole.`);
-        autoroles = autoroles.filter(id => id !== role.id);
-        db.prepare('UPDATE server_config SET autoroles=? WHERE guild_id=?').run(JSON.stringify(autoroles), gid);
-        return interaction.editReply(`✅ <@&${role.id}> retiré des autoroles.`);
-      }
-    }
-  },
-
-  // ── /massrole ──────────────────────────────────────────────
-  {
-    data: new SlashCommandBuilder().setName('massrole').setDescription('⚡ (Admin) Donner ou retirer un rôle à tous les membres')
-      .addStringOption(o => o.setName('action').setDescription('Action').setRequired(true)
-        .addChoices(
-          { name: '➕ Donner à tous', value: 'add' },
-          { name: '➖ Retirer à tous', value: 'remove' },
-          { name: '🔄 Donner aux membres sans rôle (vérifiés)', value: 'fill_verified' },
-        ))
-      .addRoleOption(o => o.setName('role').setDescription('Rôle cible').setRequired(true))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    async execute(interaction) {
-      await interaction.deferReply({ ephemeral: true });
-      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
-      const action = interaction.options.getString('action');
-      const role = interaction.options.getRole('role');
-      const guild = interaction.guild;
-
-      if (role.managed) return interaction.editReply('❌ Impossible de gérer un rôle d\'intégration.');
-      if (role.id === guild.id) return interaction.editReply('❌ Le rôle @everyone ne peut pas être modifié.');
-
-      await interaction.editReply(`⏳ Massrole **${action === 'add' ? 'ajout' : action === 'remove' ? 'retrait' : 'fill'}** de <@&${role.id}> en cours...`);
-
-      await guild.members.fetch().catch(() => {});
-      let count = 0, errors = 0;
-      const members = guild.members.cache;
-
-      for (const [, member] of members) {
-        if (member.user.bot) continue;
-        try {
-          if (action === 'add' && !member.roles.cache.has(role.id)) {
-            await member.roles.add(role).catch(() => {});
-            count++;
-          } else if (action === 'remove' && member.roles.cache.has(role.id)) {
-            await member.roles.remove(role).catch(() => {});
-            count++;
-          } else if (action === 'fill_verified') {
-            const dbUser = db.prepare('SELECT verified FROM users WHERE discord_id=?').get(member.id);
-            if (dbUser?.verified && !member.roles.cache.has(role.id)) {
-              await member.roles.add(role).catch(() => {});
-              count++;
-            }
-          }
-          // Rate limit safety
-          if (count % 10 === 0) await new Promise(r => setTimeout(r, 1000));
-        } catch { errors++; }
-      }
-
-      await sendLog(guild, new EmbedBuilder().setColor(C.warning)
-        .setAuthor({ name: `⚡ Massrole — ${action}` })
-        .addFields(
-          { name: '🏷️ Rôle', value: `<@&${role.id}>`, inline: true },
-          { name: '✅ Modifiés', value: `${count}`, inline: true },
-          { name: '❌ Erreurs', value: `${errors}`, inline: true },
-          { name: '🛡️ Staff', value: `<@${interaction.user.id}>`, inline: true },
-        ).setTimestamp());
-
-      await interaction.editReply(`✅ Massrole terminé !\n🏷️ <@&${role.id}> → **${action === 'add' ? 'donné' : action === 'remove' ? 'retiré' : 'donné aux vérifiés'}** à **${count}** membre(s)${errors ? ` (${errors} erreur(s))` : ''}.`);
     }
   },
 
