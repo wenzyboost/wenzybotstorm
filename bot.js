@@ -1197,7 +1197,9 @@ async function doVerify(interaction) {
   try {
     const g = interaction.guild;
     const membresRole = g.roles.cache.find(r=>r.name==='Membres');
+    const nonvRole = g.roles.cache.find(r=>r.name==='🔒 Non Vérifié');
     const debutantRole = g.roles.cache.find(r=>r.name==='5 - Débutants');
+    if (nonvRole) await interaction.member.roles.remove(nonvRole).catch(()=>{});
     if (membresRole) await interaction.member.roles.add(membresRole).catch(()=>{});
     if (debutantRole) await interaction.member.roles.add(debutantRole).catch(()=>{});
   } catch {}
@@ -1500,66 +1502,85 @@ const commands = [
       await interaction.deferReply({ ephemeral: true });
       const guild = interaction.guild, log = [];
 
-      // ── WEBHOOK SURVIVANT ──
-      // L'interaction webhook survit même si le salon est supprimé.
-      // On utilise l'API REST directement avec le token d'interaction (valable 15 min).
-      const iRest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-      const webhookBase = `/webhooks/${interaction.applicationId}/${interaction.token}`;
-
-      const updateProgress = async (msg) => {
-        try {
-          await iRest.patch(`${webhookBase}/messages/@original`, {
-            body: { embeds: [{ color: 0xFEE75C, author: { name: '⏳ Setup en cours...' }, description: msg, timestamp: new Date().toISOString() }] }
-          });
-        } catch {}
-      };
-
-      const finalReply = async (embeds) => {
-        try {
-          await iRest.patch(`${webhookBase}/messages/@original`, { body: { embeds } });
-        } catch {}
-      };
-
-      // ── HELPER : séquentiel avec retry sur 429 ──────────────────
-      const seq = async (fn) => {
-        while (true) {
-          try { return await fn(); }
-          catch (e) {
-            const retry = e?.rawError?.retry_after ?? e?.retryAfter;
-            if (retry) { await new Promise(r => setTimeout(r, (retry * 1000) + 500)); }
-            else { throw e; }
-          }
-        }
-      };
-
-      // ═══════════════════════════════════════════════════════════
-      // ÉTAPE 1 — NETTOYAGE SALONS
-      // ═══════════════════════════════════════════════════════════
-      await updateProgress('🧹 **Étape 1/4** — Suppression des salons...\n_Le salon de commande va disparaître, c\'est normal._');
-      const chToDelete = [...guild.channels.cache.values()];
-      for (const ch of chToDelete) {
-        await seq(() => ch.delete('wenzy-setup reset')).catch(() => {});
+      // ── NETTOYAGE SALONS ──
+      log.push('🧹 Nettoyage des salons...');
+      for(const ch of guild.channels.cache.values()){
+        await ch.delete('wenzy-setup reset').catch(()=>{});
       }
-      log.push(`✅ Salons supprimés`);
+      await new Promise(r=>setTimeout(r,2000));
 
-      // ═══════════════════════════════════════════════════════════
-      // ÉTAPE 2 — NETTOYAGE RÔLES
-      // ═══════════════════════════════════════════════════════════
-      await updateProgress('🧹 **Étape 2/4** — Suppression des rôles...');
+      // ── NETTOYAGE ROLES (sauf @everyone et rôles du bot) ──
+      log.push('🧹 Nettoyage des rôles...');
       const botMember = guild.members.me;
       const botHighestPos = botMember?.roles.highest.position ?? 0;
-      const rolesToDelete = [...guild.roles.cache.filter(r =>
-        r.id !== guild.id && !r.managed && r.position < botHighestPos
-      ).values()];
-      for (const role of rolesToDelete) {
-        await seq(() => role.delete('wenzy-setup reset')).catch(() => {});
+      for(const role of guild.roles.cache.values()){
+        if (role.id === guild.id) continue; // @everyone
+        if (role.managed) continue; // rôles gérés (bots)
+        if (role.position >= botHighestPos) continue; // rôles plus hauts que le bot
+        await role.delete('wenzy-setup reset').catch(()=>{});
       }
-      log.push(`✅ Rôles supprimés`);
+      await new Promise(r=>setTimeout(r,2000));
+      log.push('✅ Rôles supprimés');
 
-      // ═══════════════════════════════════════════════════════════
-      // ÉTAPE 3 — CRÉATION SALONS (sans perms rôles pour l'instant)
-      // ═══════════════════════════════════════════════════════════
-      await updateProgress('🏗️ **Étape 3/4** — Création des salons...');
+      // ── CREATION DES ROLES ──
+      const roleDefs = [
+        { name:'Wenzy',               color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Madame Wenzy',        color:0xFF69B4, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Squidd',              color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Owners',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Co-Owners',           color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Superviseur Staff',   color:0xF39C12, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Chef Admins',         color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Admins',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
+        { name:'Admins Test',         color:0xE67E22, hoist:false, perms:[PermissionFlagsBits.ModerateMembers] },
+        { name:'Chef Modérateurs',    color:0x3498DB, hoist:true,  perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages,PermissionFlagsBits.KickMembers] },
+        { name:'Capitaine Modérateurs',color:0x3498DB,hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
+        { name:'Haut Modérateurs',    color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
+        { name:'Modérateurs',         color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
+        { name:'Modérateur Test',     color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
+        { name:'Staff',               color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
+        { name:'Amis',                color:0xE91E8C, hoist:true,  perms:[] },
+        { name:'Contents Creators',   color:0xFF4500, hoist:true,  perms:[] },
+        { name:'Protégés Des Owners', color:0x9B59B6, hoist:false, perms:[] },
+        { name:'Boosteurs',           color:0xFF73FA, hoist:false, perms:[] },
+        { name:'Middleman',           color:0x2ECC71, hoist:false, perms:[] },
+        { name:'Soutien | .gg/wenzymm2', color:0x5865F2, hoist:false, perms:[] },
+        { name:'Protéger de Kurai',   color:0x9B59B6, hoist:false, perms:[] },
+        { name:'50 - Goat',           color:0xF1C40F, hoist:true,  perms:[] },
+        { name:'30 - Elites',         color:0x9B59B6, hoist:false, perms:[] },
+        { name:'20 - Puants',         color:0x3498DB, hoist:false, perms:[] },
+        { name:'15 - Pipelettes',     color:0x27AE60, hoist:false, perms:[] },
+        { name:'10 - Bavards',        color:0x2ECC71, hoist:false, perms:[] },
+        { name:'5 - Débutants',       color:0x95A5A6, hoist:false, perms:[] },
+        { name:'Gingerscope',         color:0xFF6B35, hoist:false, perms:[] },
+        { name:'Traveler Axe',        color:0x8B4513, hoist:false, perms:[] },
+        { name:'Vampire Axe',         color:0xDC143C, hoist:false, perms:[] },
+        { name:'Harvester',           color:0x228B22, hoist:false, perms:[] },
+        { name:'Icepiercer',          color:0x87CEEB, hoist:false, perms:[] },
+        { name:'Heart Blade',         color:0xFF69B4, hoist:false, perms:[] },
+        { name:'Elderwood Blade',     color:0x556B2F, hoist:false, perms:[] },
+        { name:'Membres',             color:0x95A5A6, hoist:false, perms:[] },
+        { name:'Homme',               color:0x3498DB, hoist:false, perms:[] },
+        { name:'Femme',               color:0xE91E8C, hoist:false, perms:[] },
+        { name:'+18',                 color:0xFF4500, hoist:false, perms:[] },
+        { name:'-18',                 color:0x2ECC71, hoist:false, perms:[] },
+        { name:'🔇 Muet',             color:0x2C2F33, hoist:false, perms:[] },
+        { name:'🔒 Non Vérifié',      color:0x2C2F33, hoist:false, perms:[] },
+        { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
+      ];
+
+      const cr = {};
+      for(const rd of roleDefs){
+        try {
+          const p = rd.perms.length>0?rd.perms.reduce((a,b)=>a|b,0n):0n;
+          cr[rd.name]=await guild.roles.create({name:rd.name,color:rd.color,hoist:rd.hoist,permissions:p});
+          log.push(`✅ Rôle: ${rd.name}`);
+        } catch(e){ log.push(`⚠️ Rôle ${rd.name}: ${e.message}`); }
+      }
+
+      const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
+      const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]).filter(Boolean);
+      const nonv = cr['🔒 Non Vérifié'];
       const everyone = guild.id;
 
       const catDefs = [
@@ -1696,135 +1717,39 @@ const commands = [
         },
       ];
 
-      // Création salons SANS perms rôles (les rôles n'existent pas encore)
-      // Les perms staff/readonly seront appliquées à l'étape 4 après création des rôles.
       const cm = {};
-      // On garde la définition du type de chaque salon pour l'étape 4
-      const chTypeMeta = {};
-      let catCount = 0, chCount = 0;
-
       for(const cd of catDefs){
-        let cat;
-        try {
-          cat = await seq(() => guild.channels.create({
-            name: cd.name,
-            type: ChannelType.GuildCategory,
-          }));
-          log.push(`📁 ${cd.name}`);
-          catCount++;
-        } catch(e) {
-          log.push(`❌ Catégorie ${cd.name}: ${e.message}`);
-          continue;
-        }
+        const catPow = [
+          {id:everyone,allow:[PermissionFlagsBits.ViewChannel]},
+          ...(nonv?[{id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]}]:[]),
+        ];
+        const cat = await guild.channels.create({name:cd.name,type:ChannelType.GuildCategory,permissionOverwrites:catPow});
+        log.push(`📁 ${cd.name}`);
 
         for(const ch of cd.chs){
-          try {
-            cm[ch.name] = await seq(() => guild.channels.create({
-              name: ch.name,
-              type: ch.voice ? ChannelType.GuildVoice : ChannelType.GuildText,
-              parent: cat.id,
-            }));
-            chTypeMeta[ch.name] = { staff: ch.staff, readonly: ch.readonly, ticketEmbed: ch.ticketEmbed, welcomeEmbed: ch.welcomeEmbed, gameEmbed: ch.gameEmbed, voice: ch.voice };
-            log.push(`  ✅ ${ch.name}`);
-            chCount++;
-          } catch(e) {
-            log.push(`  ❌ Salon ${ch.name}: ${e.message}`);
+          const cpows = [];
+          if(ch.staff){
+            cpows.push({id:everyone,deny:[PermissionFlagsBits.ViewChannel]});
+            for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]});
+          } else if(ch.readonly||ch.ticketEmbed||ch.welcomeEmbed||ch.gameEmbed){
+            cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]});
+            if(nonv)cpows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
+            for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.SendMessages]});
+          } else if(ch.voice||ch.createPv){
+            // vocal
+          } else {
+            cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel]});
+            if(nonv)cpows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
           }
+          cm[ch.name] = await guild.channels.create({
+            name:ch.name,
+            type:ch.voice?ChannelType.GuildVoice:ChannelType.GuildText,
+            parent:cat.id,
+            permissionOverwrites:cpows.length?cpows:undefined,
+          });
+          log.push(`  ✅ ${ch.name}`);
         }
-
-        await updateProgress(`🏗️ **Étape 3/4** — Salons\nCatégories : **${catCount}** · Salons : **${chCount}**\nEn cours : **${cd.name}**`);
       }
-      log.push(`📊 ${catCount} catégories · ${chCount} salons créés`);
-
-      // ═══════════════════════════════════════════════════════════
-      // ÉTAPE 4 — CRÉATION RÔLES + APPLICATION PERMS
-      // ═══════════════════════════════════════════════════════════
-      await updateProgress('⚙️ **Étape 4/4** — Création des rôles...');
-
-      const roleDefs = [
-        { name:'Wenzy',               color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Madame Wenzy',        color:0xFF69B4, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Squidd',              color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Owners',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Co-Owners',           color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Superviseur Staff',   color:0xF39C12, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Chef Admins',         color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Admins',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Admins Test',         color:0xE67E22, hoist:false, perms:[PermissionFlagsBits.ModerateMembers] },
-        { name:'Chef Modérateurs',    color:0x3498DB, hoist:true,  perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages,PermissionFlagsBits.KickMembers] },
-        { name:'Capitaine Modérateurs',color:0x3498DB,hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Haut Modérateurs',    color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Modérateurs',         color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Modérateur Test',     color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
-        { name:'Staff',               color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
-        { name:'Amis',                color:0xE91E8C, hoist:true,  perms:[] },
-        { name:'Contents Creators',   color:0xFF4500, hoist:true,  perms:[] },
-        { name:'Protégés Des Owners', color:0x9B59B6, hoist:false, perms:[] },
-        { name:'Boosteurs',           color:0xFF73FA, hoist:false, perms:[] },
-        { name:'Middleman',           color:0x2ECC71, hoist:false, perms:[] },
-        { name:'Soutien | .gg/wenzymm2', color:0x5865F2, hoist:false, perms:[] },
-        { name:'Protéger de Kurai',   color:0x9B59B6, hoist:false, perms:[] },
-        { name:'50 - Goat',           color:0xF1C40F, hoist:true,  perms:[] },
-        { name:'30 - Elites',         color:0x9B59B6, hoist:false, perms:[] },
-        { name:'20 - Puants',         color:0x3498DB, hoist:false, perms:[] },
-        { name:'15 - Pipelettes',     color:0x27AE60, hoist:false, perms:[] },
-        { name:'10 - Bavards',        color:0x2ECC71, hoist:false, perms:[] },
-        { name:'5 - Débutants',       color:0x95A5A6, hoist:false, perms:[] },
-        { name:'Gingerscope',         color:0xFF6B35, hoist:false, perms:[] },
-        { name:'Traveler Axe',        color:0x8B4513, hoist:false, perms:[] },
-        { name:'Vampire Axe',         color:0xDC143C, hoist:false, perms:[] },
-        { name:'Harvester',           color:0x228B22, hoist:false, perms:[] },
-        { name:'Icepiercer',          color:0x87CEEB, hoist:false, perms:[] },
-        { name:'Heart Blade',         color:0xFF69B4, hoist:false, perms:[] },
-        { name:'Elderwood Blade',     color:0x556B2F, hoist:false, perms:[] },
-        { name:'Membres',             color:0x95A5A6, hoist:false, perms:[] },
-        { name:'Homme',               color:0x3498DB, hoist:false, perms:[] },
-        { name:'Femme',               color:0xE91E8C, hoist:false, perms:[] },
-        { name:'+18',                 color:0xFF4500, hoist:false, perms:[] },
-        { name:'-18',                 color:0x2ECC71, hoist:false, perms:[] },
-        { name:'🔇 Muet',             color:0x2C2F33, hoist:false, perms:[] },
-        { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
-      ];
-
-      const cr = {};
-      let roleCount = 0;
-      for(const rd of roleDefs){
-        try {
-          const p = rd.perms.length > 0 ? rd.perms.reduce((a,b) => a|b, 0n) : 0n;
-          cr[rd.name] = await seq(() => guild.roles.create({name:rd.name,color:rd.color,hoist:rd.hoist,permissions:p}));
-          log.push(`✅ Rôle: ${rd.name}`);
-          roleCount++;
-        } catch(e) { log.push(`⚠️ Rôle ${rd.name}: ${e.message}`); }
-      }
-      log.push(`📊 ${roleCount}/${roleDefs.length} rôles créés`);
-
-      // ── APPLIQUER PERMS SUR LES SALONS MAINTENANT QUE LES RÔLES EXISTENT ──
-      await updateProgress('🔐 Application des permissions sur les salons...');
-      const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
-      const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]??guild.roles.cache.find(r=>r.name===n)).filter(Boolean);
-
-      for(const [chName, ch] of Object.entries(cm)){
-        if (!ch) continue;
-        const meta = chTypeMeta[chName] ?? {};
-        try {
-          if(meta.staff){
-            await seq(() => ch.permissionOverwrites.set([
-              {id:everyone, deny:[PermissionFlagsBits.ViewChannel]},
-              ...modRoles.map(r=>({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]})),
-            ]));
-          } else if(meta.readonly||meta.ticketEmbed||meta.welcomeEmbed||meta.gameEmbed){
-            await seq(() => ch.permissionOverwrites.set([
-              {id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]},
-              ...modRoles.map(r=>({id:r.id,allow:[PermissionFlagsBits.SendMessages]})),
-            ]));
-          } else if(!meta.voice){
-            await seq(() => ch.permissionOverwrites.set([
-              {id:everyone,allow:[PermissionFlagsBits.ViewChannel]},
-            ]));
-          }
-        } catch(e) { log.push(`⚠️ Perms ${chName}: ${e.message}`); }
-      }
-      log.push('✅ Permissions appliquées');
 
       db.prepare('INSERT OR REPLACE INTO automod_config (guild_id,block_links,anti_spam,anti_caps,anti_raid,max_warns_mute,max_warns_kick) VALUES (?,1,1,1,1,3,5)').run(guild.id);
       db.prepare('INSERT OR REPLACE INTO server_config (guild_id) VALUES (?)').run(guild.id);
@@ -2180,272 +2105,24 @@ const commands = [
         log.push('✅ Embed giveaways');
       }
 
-      // ── EMBED ANNONCES ──
-      const announceCh = cm['📢┃annonces'];
-      if(announceCh){
-        await announceCh.send({
-          embeds:[new EmbedBuilder().setColor(C.info)
-            .setAuthor({name:`📢 Annonces — ${guild.name}`,iconURL:guild.iconURL()??undefined})
-            .setDescription([
-              '> Les annonces importantes du serveur apparaissent ici.',
-              '',
-              '**📋 Types d\'annonces :**',
-              '┣ 🛠️ Mises à jour du serveur',
-              '┣ 🎉 Événements et giveaways',
-              '┣ 🗡️ Nouvelles règles MM2',
-              '┗ 📢 Informations importantes',
-              '',
-              '> Active les notifications 🔔 pour ne rien manquer !',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed annonces');
-      }
-
-      // ── EMBED BOOSTS ──
-      const boostsCh = cm['🚀┃boosts'];
-      if(boostsCh){
-        await boostsCh.send({
-          embeds:[new EmbedBuilder().setColor(C.pink)
-            .setAuthor({name:`🚀 Boosteurs — ${guild.name}`,iconURL:guild.iconURL()??undefined})
-            .setDescription([
-              '> **Merci à tous ceux qui boostent le serveur !** 💜',
-              '',
-              '**🎁 Avantages des boosteurs :**',
-              '┣ 🏷️ Rôle **Boosteurs** exclusif',
-              '┣ 🪙 **+500 pièces** offerts',
-              '┣ ✨ **+200 XP** bonus',
-              '┗ 💬 Accès à des salons spéciaux',
-              '',
-              '> Booste le serveur pour soutenir la communauté !',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed boosts');
-      }
-
-      // ── EMBED RÉSEAUX ──
-      const reseauxCh = cm['🌐┃réseaux'];
-      if(reseauxCh){
-        await reseauxCh.send({
-          embeds:[new EmbedBuilder().setColor(C.blurple)
-            .setAuthor({name:`🌐 Réseaux — ${guild.name}`,iconURL:guild.iconURL()??undefined})
-            .setDescription([
-              '> **Retrouve Wenzy sur toutes les plateformes !**',
-              '',
-              '**📱 Liens officiels :**',
-              '┣ ▶️ **YouTube** — Vidéos MM2 & Gaming',
-              '┣ 🎵 **TikTok** — Clips & highlights',
-              '┣ 📸 **Instagram** — Photos & stories',
-              '┗ 🎮 **Roblox** — Profil officiel',
-              '',
-              '> Suis tous les réseaux pour soutenir Wenzy !',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed réseaux');
-      }
-
-      // ── EMBED PARTENARIAT ──
-      const partCh = cm['🤝┃partenariat'];
-      if(partCh){
-        await partCh.send({
-          embeds:[new EmbedBuilder().setColor(C.teal)
-            .setAuthor({name:`🤝 Partenariats — ${guild.name}`,iconURL:guild.iconURL()??undefined})
-            .setDescription([
-              '> **Tu souhaites nouer un partenariat avec notre serveur ?**',
-              '',
-              '**📋 Conditions :**',
-              '┣ ✅ Serveur actif avec **+100 membres**',
-              '┣ ✅ Contenu en rapport avec MM2 / Gaming',
-              '┣ ✅ Modération active et règlement clair',
-              '┗ ✅ Pas de contenu NSFW ni toxique',
-              '',
-              '**📩 Pour postuler :**',
-              '→ Ouvre un ticket dans **🎫┃ticket** catégorie **Candidature**',
-              '→ Présente ton serveur + lien d\'invitation',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed partenariat');
-      }
-
-      // ── EMBED FAQ ──
-      const faqCh = cm['❓┃faq'];
-      if(faqCh){
-        await faqCh.send({
-          embeds:[new EmbedBuilder().setColor(C.warning)
-            .setAuthor({name:`❓ FAQ — Foire Aux Questions`,iconURL:guild.iconURL()??undefined})
-            .setDescription([
-              '**Q : Comment je commence à trader ?**',
-              '→ Lie ton compte Roblox dans **🔗┃lier-roblox**, puis poste dans **📬┃poster-un-trade**.',
-              '',
-              '**Q : C\'est quoi un Middleman ?**',
-              '→ Un staff de confiance qui supervise les gros trades pour éviter les scams.',
-              '',
-              '**Q : J\'ai été scammé, que faire ?**',
-              '→ Ouvre un ticket **💀 Scam** dans **🎫┃ticket** avec des preuves.',
-              '',
-              '**Q : Comment gagner des pièces ?**',
-              '→ `/daily`, `/work`, trader, participer aux giveaways.',
-              '',
-              '**Q : C\'est quoi le système XP ?**',
-              '→ Tu gagnes de l\'XP en chattant, en vocal et en tradant. Ça débloque des rôles.',
-              '',
-              '**Q : Comment rejoindre le staff ?**',
-              '→ Ouvre un ticket **📋 Candidature** dans **🎫┃ticket**.',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed FAQ');
-      }
-
-      // ── EMBED 1VS1 ──
-      const unVsUnCh = cm['⚔️┃1vs1'];
-      if(unVsUnCh){
-        await unVsUnCh.send({
-          embeds:[new EmbedBuilder().setColor(C.danger)
-            .setAuthor({name:'⚔️ 1vs1 MM2 — Défis'})
-            .setDescription([
-              '> **Lance un défi à n\'importe quel membre ici !**',
-              '',
-              '**🎮 Comment défier ?**',
-              '→ `/duel @membre <mise>` pour un duel de pièces',
-              '→ Poste ton défi en message avec ton profil',
-              '',
-              '**📋 Règles :**',
-              '┣ ✅ Accord mutuel obligatoire',
-              '┣ ✅ Screenshot du résultat dans **🏆┃vouches**',
-              '┗ ❌ Pas de rage-quit, pas d\'excuses',
-              '',
-              '> Que le meilleur gagne ! 🏆',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed 1vs1');
-      }
-
-      // ── EMBED PRICE-CHECK ──
-      const priceCh = cm['💰┃price-check'];
-      if(priceCh){
-        await priceCh.send({
-          embeds:[new EmbedBuilder().setColor(C.gold)
-            .setAuthor({name:'💰 Price Check — Valeurs MM2'})
-            .setDescription([
-              '> **Vérifie la valeur de n\'importe quelle arme MM2 ici.**',
-              '',
-              '**🔎 Comment vérifier ?**',
-              '→ `/trade check <offre> <recois>` pour comparer deux offres',
-              '→ Poste ton arme en message pour avis communauté',
-              '',
-              '**💡 Conseils :**',
-              '┣ Les valeurs sont mises à jour automatiquement',
-              '┣ Un trade équitable = différence de moins de 20 val',
-              '┗ Toujours vérifier avant d\'accepter un trade !',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed price-check');
-      }
-
-      // ── EMBED CANDIDATURES ──
-      const candidCh = cm['📋┃candidatures'];
-      if(candidCh){
-        await candidCh.send({
-          embeds:[new EmbedBuilder().setColor(C.purple)
-            .setAuthor({name:'📋 Candidatures Staff — Wenzy MM2',iconURL:guild.iconURL()??undefined})
-            .setDescription([
-              '> **Tu veux rejoindre l\'équipe staff ? Lis ça.**',
-              '',
-              '**✅ Prérequis :**',
-              '┣ 📅 Être membre actif depuis **+2 semaines**',
-              '┣ 🗡️ Au moins **10 trades** complétés',
-              '┣ 🔇 Aucun warn actif',
-              '┣ 🎙️ Disponible régulièrement',
-              '┗ 🧠 Calme, mature et sérieux',
-              '',
-              '**📩 Postuler :**',
-              '→ Ouvre un ticket **📋 Candidature** dans **🎫┃ticket**',
-              '→ Présente-toi, ton expérience, tes disponibilités',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed candidatures');
-      }
-
-      // ── EMBED PLAYGROUND / JEUX ──
-      const playgroundCh = cm['🎢┃playground'];
-      if(playgroundCh){
-        await playgroundCh.send({
-          embeds:[new EmbedBuilder().setColor(C.teal)
-            .setAuthor({name:'🎢 Playground — Zone Fun'})
-            .setDescription([
-              '> **Bienvenue dans la zone fun !** Amuse-toi sans prise de tête.',
-              '',
-              '**🎮 Ce que tu peux faire ici :**',
-              '┣ 🪙 `/coinflip <mise>` — Pile ou face',
-              '┣ ⚔️ `/duel @membre <mise>` — Défi',
-              '┣ 🎁 Participer aux mini-jeux du bot',
-              '┗ 💬 Discuter librement',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed playground');
-      }
-
-      const jeuxCh = cm['🎲┃jeux'];
-      if(jeuxCh){
-        await jeuxCh.send({
-          embeds:[new EmbedBuilder().setColor(C.gold)
-            .setAuthor({name:'🎲 Jeux & Économie'})
-            .setDescription([
-              '> **Dépense tes pièces, tente ta chance !**',
-              '',
-              '**🎮 Commandes :**',
-              '┣ 🪙 `/coinflip <mise>` — Mise entre 10 et 1000 pièces',
-              '┣ ⚔️ `/duel @membre <mise>` — Duel direct',
-              '┣ 🛒 `/shop` — Dépenser ses pièces en boutique',
-              '┣ 📊 `/leaderboard coins` — Classement richesse',
-              '┗ 💰 `/daily` / `/work` — Gagner des pièces',
-              '',
-              '> Bonne chance ! 🍀',
-            ].join('\n'))
-            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
-            .setTimestamp()],
-        });
-        log.push('✅ Embed jeux');
-      }
-
       await updateLeaderboards(guild);
       await updateStatChannels(guild);
       log.push('✅ Stats et leaderboards initialisés');
 
-      await finalReply([{
-        color: 0x57F287,
-        author: { name: '🏗️ Setup Wenzy v8.0 terminé !' },
-        description: log.map(l=>`\`${l}\``).join('\n').slice(0,3900),
-        fields: [{
-          name: '📋 Prochaines étapes',
-          value: [
+      await interaction.editReply({
+        embeds:[new EmbedBuilder().setColor(C.success)
+          .setAuthor({name:'🏗️ Setup Wenzy v7.5 terminé !'})
+          .setDescription(log.map(l=>`\`${l}\``).join('\n').slice(0,3900))
+          .addFields({name:'📋 Prochaines étapes',value:[
             '**1.** Donne-toi le rôle **Owners** dans la liste des rôles',
             '**2.** `/panel` → configure tickets, XP roles, YouTube, annonces...',
             '**3.** `/panel xp-roles` → configure quel rôle donner à quel seuil XP',
             '**4.** `/panel status-role` → rôle pour .gg/wenzy dans le status',
             '**5.** `/addserver <lien>` pour les serveurs privés MM2',
             '**6.** AutoMod activé par défaut — liens bloqués, anti-spam, anti-raid',
-          ].join('\n'),
-        }],
-        timestamp: new Date().toISOString(),
-      }]);
+          ].join('\n')})
+          .setTimestamp()],
+      });
     }
   },
 
@@ -2958,6 +2635,7 @@ const commands = [
       const ex = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
       if(ex) db.prepare('UPDATE users SET roblox_id=?,roblox_username=?,verify_code=?,verified=0 WHERE discord_id=?').run(String(rb.id),rb.name,code,did);
       else db.prepare('INSERT INTO users (discord_id,roblox_id,roblox_username,verify_code) VALUES (?,?,?,?)').run(did,String(rb.id),rb.name,code);
+      try{const nv=interaction.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');if(nv&&!interaction.member.roles.cache.has(nv.id))await interaction.member.roles.add(nv);}catch{}
       await interaction.editReply({
         embeds:[new EmbedBuilder().setColor(C.info)
           .setAuthor({name:'🔗 Vérification — Étape 1/2'})
@@ -3861,6 +3539,7 @@ async function handleModal(interaction) {
     const ex=db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
     if(ex)db.prepare('UPDATE users SET roblox_id=?,roblox_username=?,verify_code=?,verified=0 WHERE discord_id=?').run(String(rb.id),rb.name,code,did);
     else db.prepare('INSERT INTO users (discord_id,roblox_id,roblox_username,verify_code) VALUES (?,?,?,?)').run(did,String(rb.id),rb.name,code);
+    try{const nv=interaction.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');if(nv&&!interaction.member.roles.cache.has(nv.id))await interaction.member.roles.add(nv);}catch{}
     await interaction.editReply({
       embeds:[new EmbedBuilder().setColor(C.info).setAuthor({name:'🔗 Code généré !'}).setDescription([`Compte : **${rb.name}**`,'','**Code à coller dans ta bio Roblox :**',`\`\`\`${code}\`\`\``,'→ [Modifier ta bio](https://www.roblox.com/my/account#!/info)','','Reviens et clique Vérifier.'].join('\n'))],
       components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_verify_now').setLabel('✅ Vérifier maintenant').setStyle(ButtonStyle.Success))],
@@ -4080,11 +3759,13 @@ client.on(Events.VoiceStateUpdate, async(old,neu)=>{
 // ── MEMBER JOIN ──────────────────────────────────────────────
 client.on(Events.GuildMemberAdd, async member=>{
   try{
+    const nonv=member.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');
+    if (nonv) await member.roles.add(nonv);
     const cfg=getConfig(member.guild.id);
     if (cfg?.welcome_enabled!==0) {
       const welcomeCh=cfg?.welcome_channel
         ?member.guild.channels.cache.get(cfg.welcome_channel)
-        :member.guild.channels.cache.find(c=>c.name.includes('bienvenue')||c.name.includes('welcome'));
+        :member.guild.channels.cache.find(c=>c.name.includes('chat')||c.name.includes('général'));
       if (welcomeCh) await welcomeCh.send({embeds:[welcomeEmbed(member,member.guild)]});
     }
     await handleAntiRaid(member.guild,member);
