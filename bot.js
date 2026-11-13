@@ -1197,9 +1197,7 @@ async function doVerify(interaction) {
   try {
     const g = interaction.guild;
     const membresRole = g.roles.cache.find(r=>r.name==='Membres');
-    const nonvRole = g.roles.cache.find(r=>r.name==='🔒 Non Vérifié');
     const debutantRole = g.roles.cache.find(r=>r.name==='5 - Débutants');
-    if (nonvRole) await interaction.member.roles.remove(nonvRole).catch(()=>{});
     if (membresRole) await interaction.member.roles.add(membresRole).catch(()=>{});
     if (debutantRole) await interaction.member.roles.add(debutantRole).catch(()=>{});
   } catch {}
@@ -1502,70 +1500,25 @@ const commands = [
       await interaction.deferReply({ ephemeral: true });
       const guild = interaction.guild, log = [];
 
-      // ── DÉLAI ADAPTÉ AU NIVEAU DE BOOST ──
-      // Level 3 (14+ boosts) : Discord est ultra strict sur les modifs de structure.
-      // On adapte le délai entre chaque requête selon le niveau.
-      const boostLevel = guild.premiumTier; // 0, 1, 2, ou 3
-      const boostCount = guild.premiumSubscriptionCount ?? 0;
-      const delay = boostLevel >= 3 ? 1800 : boostLevel >= 2 ? 1200 : boostLevel >= 1 ? 800 : 400;
-      log.push(`📊 Serveur Level ${boostLevel} (${boostCount} boosts) — délai ${delay}ms/requête`);
-
-      const wait = (ms) => new Promise(r => setTimeout(r, ms));
-
       // ── NETTOYAGE SALONS ──
       log.push('🧹 Nettoyage des salons...');
       for(const ch of guild.channels.cache.values()){
         await ch.delete('wenzy-setup reset').catch(()=>{});
-        await wait(delay);
       }
-      await wait(3000);
+      await new Promise(r=>setTimeout(r,2000));
 
-      // ── NETTOYAGE ROLES ──
-      // Les rôles "Nitro Booster / Premium Subscriber" sur serveurs boostés
-      // renvoient un 403 (pas un 429) — ils sont intouchables même avec admin.
-      // On les skippa proprement au lieu de rester bloqué dessus.
+      // ── NETTOYAGE ROLES (sauf @everyone et rôles du bot) ──
       log.push('🧹 Nettoyage des rôles...');
       const botMember = guild.members.me;
       const botHighestPos = botMember?.roles.highest.position ?? 0;
-
-      // Noms de rôles auto-Discord intouchables sur serveurs boostés
-      const untouchableNames = ['nitro booster','premium subscriber','server booster','booster','boost'];
-
-      let deletedRoles = 0, skippedRoles = 0;
       for(const role of guild.roles.cache.values()){
         if (role.id === guild.id) continue; // @everyone
-        if (role.managed) continue; // rôles bots/intégrations
-        if (role.position >= botHighestPos) continue; // au-dessus du bot
-        // Skip les rôles boost Discord natifs (403 garanti)
-        if (untouchableNames.some(n => role.name.toLowerCase().includes(n))) {
-          log.push(`⏭️ Skip rôle boost : ${role.name}`);
-          skippedRoles++;
-          continue;
-        }
-        try {
-          await role.delete('wenzy-setup reset');
-          deletedRoles++;
-          await wait(delay);
-        } catch(e) {
-          const code = e?.rawError?.code ?? e?.code;
-          if (code === 50013 || e?.status === 403) {
-            log.push(`⏭️ Skip rôle protégé : ${role.name}`);
-            skippedRoles++;
-          } else {
-            const retry = e?.rawError?.retry_after ?? e?.retryAfter;
-            if (retry) {
-              await wait((retry * 1000) + 500);
-              await role.delete('wenzy-setup reset').catch(() => { skippedRoles++; });
-              deletedRoles++;
-            } else {
-              log.push(`⚠️ Rôle ${role.name}: ${e.message}`);
-              skippedRoles++;
-            }
-          }
-        }
+        if (role.managed) continue; // rôles gérés (bots)
+        if (role.position >= botHighestPos) continue; // rôles plus hauts que le bot
+        await role.delete('wenzy-setup reset').catch(()=>{});
       }
-      await new Promise(r=>setTimeout(r,1500));
-      log.push(`✅ ${deletedRoles} rôles supprimés, ${skippedRoles} skippés`);
+      await new Promise(r=>setTimeout(r,2000));
+      log.push('✅ Rôles supprimés');
 
       // ── CREATION DES ROLES ──
       const roleDefs = [
@@ -1610,7 +1563,6 @@ const commands = [
         { name:'+18',                 color:0xFF4500, hoist:false, perms:[] },
         { name:'-18',                 color:0x2ECC71, hoist:false, perms:[] },
         { name:'🔇 Muet',             color:0x2C2F33, hoist:false, perms:[] },
-        { name:'🔒 Non Vérifié',      color:0x2C2F33, hoist:false, perms:[] },
         { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
       ];
 
@@ -1625,7 +1577,6 @@ const commands = [
 
       const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
       const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]).filter(Boolean);
-      const nonv = cr['🔒 Non Vérifié'];
       const everyone = guild.id;
 
       const catDefs = [
@@ -1766,7 +1717,6 @@ const commands = [
       for(const cd of catDefs){
         const catPow = [
           {id:everyone,allow:[PermissionFlagsBits.ViewChannel]},
-          ...(nonv?[{id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]}]:[]),
         ];
         const cat = await guild.channels.create({name:cd.name,type:ChannelType.GuildCategory,permissionOverwrites:catPow});
         log.push(`📁 ${cd.name}`);
@@ -1778,13 +1728,11 @@ const commands = [
             for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]});
           } else if(ch.readonly||ch.ticketEmbed||ch.welcomeEmbed||ch.gameEmbed){
             cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]});
-            if(nonv)cpows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
             for(const r of modRoles)cpows.push({id:r.id,allow:[PermissionFlagsBits.SendMessages]});
           } else if(ch.voice||ch.createPv){
             // vocal
           } else {
             cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel]});
-            if(nonv)cpows.push({id:nonv.id,deny:[PermissionFlagsBits.ViewChannel]});
           }
           cm[ch.name] = await guild.channels.create({
             name:ch.name,
@@ -2150,6 +2098,251 @@ const commands = [
         log.push('✅ Embed giveaways');
       }
 
+      // ── EMBED ANNONCES ──
+      const announceCh = cm['📢┃annonces'];
+      if(announceCh){
+        await announceCh.send({
+          embeds:[new EmbedBuilder().setColor(C.info)
+            .setAuthor({name:`📢 Annonces — ${guild.name}`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> Les annonces importantes du serveur apparaissent ici.',
+              '',
+              '**📋 Types d\'annonces :**',
+              '┣ 🛠️ Mises à jour du serveur',
+              '┣ 🎉 Événements et giveaways',
+              '┣ 🗡️ Nouvelles règles MM2',
+              '┗ 📢 Informations importantes',
+              '',
+              '> Active les notifications 🔔 pour ne rien manquer !',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed annonces');
+      }
+
+      // ── EMBED BOOSTS ──
+      const boostsCh = cm['🚀┃boosts'];
+      if(boostsCh){
+        await boostsCh.send({
+          embeds:[new EmbedBuilder().setColor(C.pink)
+            .setAuthor({name:`🚀 Boosteurs — ${guild.name}`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> **Merci à tous ceux qui boostent le serveur !** 💜',
+              '',
+              '**🎁 Avantages des boosteurs :**',
+              '┣ 🏷️ Rôle **Boosteurs** exclusif',
+              '┣ 🪙 **+500 pièces** offerts',
+              '┣ ✨ **+200 XP** bonus',
+              '┗ 💬 Accès à des salons spéciaux',
+              '',
+              '> Booste le serveur pour soutenir la communauté !',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed boosts');
+      }
+
+      // ── EMBED RÉSEAUX ──
+      const reseauxCh = cm['🌐┃réseaux'];
+      if(reseauxCh){
+        await reseauxCh.send({
+          embeds:[new EmbedBuilder().setColor(C.blurple)
+            .setAuthor({name:`🌐 Réseaux — ${guild.name}`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> **Retrouve Wenzy sur toutes les plateformes !**',
+              '',
+              '**📱 Liens officiels :**',
+              '┣ ▶️ **YouTube** — Vidéos MM2 & Gaming',
+              '┣ 🎵 **TikTok** — Clips & highlights',
+              '┣ 📸 **Instagram** — Photos & stories',
+              '┗ 🎮 **Roblox** — Profil officiel',
+              '',
+              '> Suis tous les réseaux pour soutenir Wenzy !',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed réseaux');
+      }
+
+      // ── EMBED PARTENARIAT ──
+      const partCh = cm['🤝┃partenariat'];
+      if(partCh){
+        await partCh.send({
+          embeds:[new EmbedBuilder().setColor(C.teal)
+            .setAuthor({name:`🤝 Partenariats — ${guild.name}`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> **Tu souhaites nouer un partenariat avec notre serveur ?**',
+              '',
+              '**📋 Conditions :**',
+              '┣ ✅ Serveur actif avec **+100 membres**',
+              '┣ ✅ Contenu en rapport avec MM2 / Gaming',
+              '┣ ✅ Modération active et règlement clair',
+              '┗ ✅ Pas de contenu NSFW ni toxique',
+              '',
+              '**📩 Pour postuler :**',
+              '→ Ouvre un ticket dans **🎫┃ticket** catégorie **Candidature**',
+              '→ Présente ton serveur + lien d\'invitation',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed partenariat');
+      }
+
+      // ── EMBED FAQ ──
+      const faqCh = cm['❓┃faq'];
+      if(faqCh){
+        await faqCh.send({
+          embeds:[new EmbedBuilder().setColor(C.warning)
+            .setAuthor({name:`❓ FAQ — Foire Aux Questions`,iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '**Q : Comment je commence à trader ?**',
+              '→ Lie ton compte Roblox dans **🔗┃lier-roblox**, puis poste dans **📬┃poster-un-trade**.',
+              '',
+              '**Q : C\'est quoi un Middleman ?**',
+              '→ Un staff de confiance qui supervise les gros trades pour éviter les scams.',
+              '',
+              '**Q : J\'ai été scammé, que faire ?**',
+              '→ Ouvre un ticket **💀 Scam** dans **🎫┃ticket** avec des preuves.',
+              '',
+              '**Q : Comment gagner des pièces ?**',
+              '→ `/daily`, `/work`, trader, participer aux giveaways.',
+              '',
+              '**Q : C\'est quoi le système XP ?**',
+              '→ Tu gagnes de l\'XP en chattant, en vocal et en tradant. Ça débloque des rôles.',
+              '',
+              '**Q : Comment rejoindre le staff ?**',
+              '→ Ouvre un ticket **📋 Candidature** dans **🎫┃ticket**.',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed FAQ');
+      }
+
+      // ── EMBED 1VS1 ──
+      const unVsUnCh = cm['⚔️┃1vs1'];
+      if(unVsUnCh){
+        await unVsUnCh.send({
+          embeds:[new EmbedBuilder().setColor(C.danger)
+            .setAuthor({name:'⚔️ 1vs1 MM2 — Défis'})
+            .setDescription([
+              '> **Lance un défi à n\'importe quel membre ici !**',
+              '',
+              '**🎮 Comment défier ?**',
+              '→ `/duel @membre <mise>` pour un duel de pièces',
+              '→ Poste ton défi en message avec ton profil',
+              '',
+              '**📋 Règles :**',
+              '┣ ✅ Accord mutuel obligatoire',
+              '┣ ✅ Screenshot du résultat dans **🏆┃vouches**',
+              '┗ ❌ Pas de rage-quit, pas d\'excuses',
+              '',
+              '> Que le meilleur gagne ! 🏆',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed 1vs1');
+      }
+
+      // ── EMBED PRICE-CHECK ──
+      const priceCh = cm['💰┃price-check'];
+      if(priceCh){
+        await priceCh.send({
+          embeds:[new EmbedBuilder().setColor(C.gold)
+            .setAuthor({name:'💰 Price Check — Valeurs MM2'})
+            .setDescription([
+              '> **Vérifie la valeur de n\'importe quelle arme MM2 ici.**',
+              '',
+              '**🔎 Comment vérifier ?**',
+              '→ `/trade check <offre> <recois>` pour comparer deux offres',
+              '→ Poste ton arme en message pour avis communauté',
+              '',
+              '**💡 Conseils :**',
+              '┣ Les valeurs sont mises à jour automatiquement',
+              '┣ Un trade équitable = différence de moins de 20 val',
+              '┗ Toujours vérifier avant d\'accepter un trade !',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed price-check');
+      }
+
+      // ── EMBED CANDIDATURES ──
+      const candidCh = cm['📋┃candidatures'];
+      if(candidCh){
+        await candidCh.send({
+          embeds:[new EmbedBuilder().setColor(C.purple)
+            .setAuthor({name:'📋 Candidatures Staff — Wenzy MM2',iconURL:guild.iconURL()??undefined})
+            .setDescription([
+              '> **Tu veux rejoindre l\'équipe staff ? Lis ça.**',
+              '',
+              '**✅ Prérequis :**',
+              '┣ 📅 Être membre actif depuis **+2 semaines**',
+              '┣ 🗡️ Au moins **10 trades** complétés',
+              '┣ 🔇 Aucun warn actif',
+              '┣ 🎙️ Disponible régulièrement',
+              '┗ 🧠 Calme, mature et sérieux',
+              '',
+              '**📩 Postuler :**',
+              '→ Ouvre un ticket **📋 Candidature** dans **🎫┃ticket**',
+              '→ Présente-toi, ton expérience, tes disponibilités',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed candidatures');
+      }
+
+      // ── EMBED PLAYGROUND / JEUX ──
+      const playgroundCh = cm['🎢┃playground'];
+      if(playgroundCh){
+        await playgroundCh.send({
+          embeds:[new EmbedBuilder().setColor(C.teal)
+            .setAuthor({name:'🎢 Playground — Zone Fun'})
+            .setDescription([
+              '> **Bienvenue dans la zone fun !** Amuse-toi sans prise de tête.',
+              '',
+              '**🎮 Ce que tu peux faire ici :**',
+              '┣ 🪙 `/coinflip <mise>` — Pile ou face',
+              '┣ ⚔️ `/duel @membre <mise>` — Défi',
+              '┣ 🎁 Participer aux mini-jeux du bot',
+              '┗ 💬 Discuter librement',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed playground');
+      }
+
+      const jeuxCh = cm['🎲┃jeux'];
+      if(jeuxCh){
+        await jeuxCh.send({
+          embeds:[new EmbedBuilder().setColor(C.gold)
+            .setAuthor({name:'🎲 Jeux & Économie'})
+            .setDescription([
+              '> **Dépense tes pièces, tente ta chance !**',
+              '',
+              '**🎮 Commandes :**',
+              '┣ 🪙 `/coinflip <mise>` — Mise entre 10 et 1000 pièces',
+              '┣ ⚔️ `/duel @membre <mise>` — Duel direct',
+              '┣ 🛒 `/shop` — Dépenser ses pièces en boutique',
+              '┣ 📊 `/leaderboard coins` — Classement richesse',
+              '┗ 💰 `/daily` / `/work` — Gagner des pièces',
+              '',
+              '> Bonne chance ! 🍀',
+            ].join('\n'))
+            .setFooter({text:`${guild.name} • Wenzy Bot v8.0`})
+            .setTimestamp()],
+        });
+        log.push('✅ Embed jeux');
+      }
+
       await updateLeaderboards(guild);
       await updateStatChannels(guild);
       log.push('✅ Stats et leaderboards initialisés');
@@ -2168,212 +2361,6 @@ const commands = [
           ].join('\n')})
           .setTimestamp()],
       });
-    }
-  },
-
-  // /wenzy-setup-build (crée salons + rôles SANS supprimer — pour serveurs boostés)
-  {
-    data: new SlashCommandBuilder()
-      .setName('wenzy-setup-build')
-      .setDescription('🏗️ Crée salons + rôles SANS tout supprimer (pour serveurs boostés)')
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    async execute(interaction) {
-      await interaction.deferReply({ ephemeral: true });
-      const guild = interaction.guild, log = [];
-
-      const iRest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-      const webhookBase = `/webhooks/${interaction.applicationId}/${interaction.token}`;
-      const updateProgress = async (msg) => {
-        try {
-          await iRest.patch(`${webhookBase}/messages/@original`, {
-            body: { embeds: [{ color: 0xFEE75C, author: { name: '⏳ Build en cours...' }, description: msg, timestamp: new Date().toISOString() }] }
-          });
-        } catch {}
-      };
-      const finalReply = async (embeds) => {
-        try { await iRest.patch(`${webhookBase}/messages/@original`, { body: { embeds } }); } catch {}
-      };
-
-      // Délai adapté au niveau boost
-      const boostLevel = guild.premiumTier;
-      const delay = boostLevel >= 3 ? 1500 : boostLevel >= 2 ? 1000 : boostLevel >= 1 ? 700 : 350;
-      const wait = (ms) => new Promise(r => setTimeout(r, ms));
-      log.push(`📊 Serveur Level ${boostLevel} — délai ${delay}ms`);
-
-      // Helper : crée seulement si ça n'existe pas déjà
-      const getOrCreateRole = async (rd) => {
-        const existing = guild.roles.cache.find(r => r.name === rd.name);
-        if (existing) return existing;
-        const p = rd.perms.length > 0 ? rd.perms.reduce((a,b) => a|b, 0n) : 0n;
-        const r = await guild.roles.create({ name:rd.name, color:rd.color, hoist:rd.hoist, permissions:p }).catch(e => { log.push(`⚠️ Rôle ${rd.name}: ${e.message}`); return null; });
-        await wait(delay);
-        return r;
-      };
-      const getOrCreateCat = async (name) => {
-        const existing = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === name);
-        if (existing) return existing;
-        const c = await guild.channels.create({ name, type: ChannelType.GuildCategory }).catch(e => { log.push(`⚠️ Cat ${name}: ${e.message}`); return null; });
-        await wait(delay);
-        return c;
-      };
-      const getOrCreateChannel = async (opts) => {
-        const existing = guild.channels.cache.find(c => c.name === opts.name && (opts.parent ? c.parentId === opts.parent : true));
-        if (existing) return existing;
-        const c = await guild.channels.create(opts).catch(e => { log.push(`⚠️ Salon ${opts.name}: ${e.message}`); return null; });
-        await wait(delay);
-        return c;
-      };
-
-      // ── ÉTAPE 1 : RÔLES ──
-      await updateProgress('⚙️ **Étape 1/3** — Création des rôles manquants...');
-      const roleDefs = [
-        { name:'Wenzy',               color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Madame Wenzy',        color:0xFF69B4, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Squidd',              color:0xE74C3C, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Owners',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Co-Owners',           color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Superviseur Staff',   color:0xF39C12, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Chef Admins',         color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Admins',              color:0xE67E22, hoist:true,  perms:[PermissionFlagsBits.Administrator] },
-        { name:'Admins Test',         color:0xE67E22, hoist:false, perms:[PermissionFlagsBits.ModerateMembers] },
-        { name:'Chef Modérateurs',    color:0x3498DB, hoist:true,  perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages,PermissionFlagsBits.KickMembers] },
-        { name:'Capitaine Modérateurs',color:0x3498DB,hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Haut Modérateurs',    color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Modérateurs',         color:0x3498DB, hoist:false, perms:[PermissionFlagsBits.ModerateMembers,PermissionFlagsBits.ManageMessages] },
-        { name:'Modérateur Test',     color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
-        { name:'Staff',               color:0x7F8C8D, hoist:false, perms:[PermissionFlagsBits.ManageMessages] },
-        { name:'Amis',                color:0xE91E8C, hoist:true,  perms:[] },
-        { name:'Contents Creators',   color:0xFF4500, hoist:true,  perms:[] },
-        { name:'Protégés Des Owners', color:0x9B59B6, hoist:false, perms:[] },
-        { name:'Boosteurs',           color:0xFF73FA, hoist:false, perms:[] },
-        { name:'Middleman',           color:0x2ECC71, hoist:false, perms:[] },
-        { name:'Soutien | .gg/wenzymm2', color:0x5865F2, hoist:false, perms:[] },
-        { name:'Protéger de Kurai',   color:0x9B59B6, hoist:false, perms:[] },
-        { name:'50 - Goat',           color:0xF1C40F, hoist:true,  perms:[] },
-        { name:'30 - Elites',         color:0x9B59B6, hoist:false, perms:[] },
-        { name:'20 - Puants',         color:0x3498DB, hoist:false, perms:[] },
-        { name:'15 - Pipelettes',     color:0x27AE60, hoist:false, perms:[] },
-        { name:'10 - Bavards',        color:0x2ECC71, hoist:false, perms:[] },
-        { name:'5 - Débutants',       color:0x95A5A6, hoist:false, perms:[] },
-        { name:'Gingerscope',         color:0xFF6B35, hoist:false, perms:[] },
-        { name:'Traveler Axe',        color:0x8B4513, hoist:false, perms:[] },
-        { name:'Vampire Axe',         color:0xDC143C, hoist:false, perms:[] },
-        { name:'Harvester',           color:0x228B22, hoist:false, perms:[] },
-        { name:'Icepiercer',          color:0x87CEEB, hoist:false, perms:[] },
-        { name:'Heart Blade',         color:0xFF69B4, hoist:false, perms:[] },
-        { name:'Elderwood Blade',     color:0x556B2F, hoist:false, perms:[] },
-        { name:'Membres',             color:0x95A5A6, hoist:false, perms:[] },
-        { name:'Homme',               color:0x3498DB, hoist:false, perms:[] },
-        { name:'Femme',               color:0xE91E8C, hoist:false, perms:[] },
-        { name:'+18',                 color:0xFF4500, hoist:false, perms:[] },
-        { name:'-18',                 color:0x2ECC71, hoist:false, perms:[] },
-        { name:'🔇 Muet',             color:0x2C2F33, hoist:false, perms:[] },
-        { name:'📢 Annonces',         color:0x5865F2, hoist:false, perms:[] },
-      ];
-      const cr = {};
-      let roleCreated = 0, roleExisting = 0;
-      for (const rd of roleDefs) {
-        const existing = guild.roles.cache.find(r => r.name === rd.name);
-        if (existing) { cr[rd.name] = existing; roleExisting++; continue; }
-        const r = await getOrCreateRole(rd);
-        if (r) { cr[rd.name] = r; roleCreated++; log.push(`✅ Rôle créé: ${rd.name}`); }
-      }
-      log.push(`📊 Rôles : ${roleCreated} créés, ${roleExisting} déjà présents`);
-
-      // ── ÉTAPE 2 : SALONS ──
-      await updateProgress(`⚙️ **Étape 2/3** — Création des salons manquants...\n_${roleCreated} rôles créés_`);
-      const admins = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins'].map(n=>cr[n]).filter(Boolean);
-      const modRoles = [...admins,'Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Modérateur Test','Staff'].map(n=>cr[n]??guild.roles.cache.find(r=>r.name===n)).filter(Boolean);
-      const everyone = guild.id;
-
-      const catDefs = [
-        { name:'📊 STATISTIQUES', chs:[{name:'🛬 Arrivés: 0',voice:true},{name:'🛫 Départs: 0',voice:true},{name:'✅ Vérifiés: 0',voice:true},{name:'🗡️ Trades: 0',voice:true},{name:'🪙 Coins: 0',voice:true}] },
-        { name:'📌 Côté Important', chs:[{name:'🎉┃bienvenue',readonly:true,welcomeEmbed:true},{name:'📋┃règlement',readonly:true},{name:'📢┃annonces',readonly:true},{name:'🚀┃boosts',readonly:true},{name:'📊┃sondages'},{name:'🤝┃partenariat',readonly:true},{name:'🌐┃réseaux',readonly:true},{name:'❓┃faq',readonly:true}] },
-        { name:'🎁 Côté Cadeaux', chs:[{name:'🎉┃giveaways',readonly:true},{name:'🏆┃mega-giveaways',readonly:true},{name:'🧾┃preuves',readonly:true}] },
-        { name:'📺 Côté Contenu', chs:[{name:'📢┃annonces-lives',readonly:true},{name:'▶️┃posts-youtube',readonly:true},{name:'🎵┃posts-tiktok',readonly:true},{name:'👥┃posts-amis',readonly:true}] },
-        { name:'🗡️ Côté Murder Mystery 2', chs:[{name:'📋┃updates',readonly:true},{name:'👀┃sneek-peaks',readonly:true},{name:'⚔️┃1vs1'},{name:'🗡️┃post-trades'},{name:'📬┃poster-un-trade'},{name:'💰┃price-check'},{name:'🏆┃vouches',readonly:true},{name:'🛡️┃middleman-panel',staff:true},{name:'🔄┃trade-adptme'},{name:'⚔️┃trade-blade'},{name:'🎮┃trade-autres'}] },
-        { name:'🔑 VÉRIFICATION', chs:[{name:'🔗┃lier-roblox'}] },
-        { name:'💬 Côté Général', chs:[{name:'💬┃chat'},{name:'📸┃médias'},{name:'⌨️┃bot-cmds'},{name:'⭐┃level',readonly:true}] },
-        { name:'🏆 CLASSEMENTS', chs:[{name:'🏅┃classement-trades',readonly:true},{name:'🪙┃classement-pièces',readonly:true},{name:'✨┃classement-xp',readonly:true}] },
-        { name:'🎮 Côté Fun', chs:[{name:'🎢┃playground'},{name:'🔢┃count'},{name:'😶┃faces-reveals'},{name:'🍔┃bouffes'},{name:'🎨┃fans-arts'},{name:'🗡️┃murder-mystery-2',readonly:true,gameEmbed:'mm2'},{name:'🧱┃minecraft',readonly:true,gameEmbed:'minecraft'},{name:'🎮┃fortnite',readonly:true,gameEmbed:'fortnite'},{name:'🔫┃valorant',readonly:true,gameEmbed:'valorant'},{name:'⚽┃football',readonly:true,gameEmbed:'football'}] },
-        { name:'🛒 ÉCONOMIE', chs:[{name:'🛒┃boutique'},{name:'🎲┃jeux'}] },
-        { name:'🎙️ Côté Vocaux', chs:[{name:'🏗️┃créer-un-vocal',createPv:true},{name:'🔇┃afk',voice:true},{name:'🎙️┃général-1',voice:true},{name:'🎙️┃général-2',voice:true},{name:'👥┃duo-1',voice:true},{name:'👥┃duo-2',voice:true},{name:'👥┃trio-1',voice:true}] },
-        { name:'🗂️ VOCAUX PRIVÉS', chs:[] },
-        { name:'🎫 Côté Support', chs:[{name:'🎫┃ticket',ticketEmbed:true},{name:'📋┃candidatures'}] },
-        { name:'Staff', chs:[{name:'📢┃annonces-staff',staff:true},{name:'💬┃chat-staff',staff:true},{name:'📸┃media-staff',staff:true},{name:'⌨️┃cmds-staff',staff:true},{name:'⚠️┃sanctions-staff',staff:true}] },
-      ];
-
-      const cm = {};
-      let catCreated = 0, chCreated = 0, chExisting = 0;
-      for (const cd of catDefs) {
-        const cat = await getOrCreateCat(cd.name);
-        if (!cat) continue;
-        if (!guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === cd.name)) catCreated++;
-
-        for (const ch of cd.chs) {
-          const existing = guild.channels.cache.find(c => c.name === ch.name);
-          if (existing) { cm[ch.name] = existing; chExisting++; continue; }
-          const cpows = [];
-          if (ch.staff) {
-            cpows.push({id:everyone,deny:[PermissionFlagsBits.ViewChannel]});
-            for(const r of modRoles) cpows.push({id:r.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]});
-          } else if (ch.readonly||ch.ticketEmbed||ch.welcomeEmbed||ch.gameEmbed) {
-            cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel],deny:[PermissionFlagsBits.SendMessages]});
-            for(const r of modRoles) cpows.push({id:r.id,allow:[PermissionFlagsBits.SendMessages]});
-          } else if (!ch.voice) {
-            cpows.push({id:everyone,allow:[PermissionFlagsBits.ViewChannel]});
-          }
-          const created = await getOrCreateChannel({
-            name: ch.name,
-            type: ch.voice ? ChannelType.GuildVoice : ChannelType.GuildText,
-            parent: cat.id,
-            permissionOverwrites: cpows.length ? cpows : undefined,
-          });
-          if (created) { cm[ch.name] = created; chCreated++; }
-        }
-        await updateProgress(`🏗️ **Étape 2/3** — Salons\nCatégories : **${catCreated}** · Salons créés : **${chCreated}** · Déjà présents : **${chExisting}**\nEn cours : **${cd.name}**`);
-      }
-      log.push(`📊 ${chCreated} salons créés, ${chExisting} déjà présents`);
-
-      // ── ÉTAPE 3 : EMBEDS dans les salons nouvellement créés ──
-      await updateProgress('📝 **Étape 3/3** — Embeds dans les nouveaux salons...');
-      db.prepare('INSERT OR REPLACE INTO automod_config (guild_id,block_links,anti_spam,anti_caps,anti_raid,max_warns_mute,max_warns_kick) VALUES (?,1,1,1,1,3,5)').run(guild.id);
-      db.prepare('INSERT OR IGNORE INTO server_config (guild_id) VALUES (?)').run(guild.id);
-
-      // Envoyer les embeds seulement dans les salons vides (nouvellement créés)
-      const sendIfEmpty = async (ch, fn) => {
-        if (!ch) return;
-        const msgs = await ch.messages.fetch({limit:1}).catch(()=>null);
-        if (msgs && msgs.size > 0) return; // salon déjà rempli, skip
-        await fn(ch);
-      };
-
-      await sendIfEmpty(cm['🔗┃lier-roblox'], async ch => {
-        await ch.send({embeds:[new EmbedBuilder().setColor(C.primary).setAuthor({name:`🔗 Lier ton compte Roblox — ${guild.name}`}).setDescription(['**Pour pouvoir trader, lie ton compte Roblox.**','','**📋 Étapes :**','**1.** Clique sur **Lier mon compte** ci-dessous','**2.** Entre ton pseudo Roblox dans le formulaire','**3.** Colle le code généré dans ta **bio Roblox**','**4.** Clique **Vérifier ✅**','','> ✅ Vérification via l\'API Roblox officielle — sécurisé'].join('\n')).setFooter({text:'Wenzy Bot v8.0 • Vérification'})],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_link_start').setLabel('🔗 Lier mon compte').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('btn_verify_now').setLabel('✅ Vérifier maintenant').setStyle(ButtonStyle.Success))]});
-      });
-      await sendIfEmpty(cm['📬┃poster-un-trade'], async ch => {
-        await ch.send({embeds:[new EmbedBuilder().setColor(C.primary).setAuthor({name:'📬 Poster un Trade MM2'}).setDescription(['Clique sur le bouton pour créer un trade.','','> ⚠️ Compte Roblox vérifié obligatoire pour trader.'].join('\n'))],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_post_trade').setLabel('🗡️ Poster un Trade').setStyle(ButtonStyle.Success))]});
-      });
-      await sendIfEmpty(cm['🎫┃ticket'], async ch => {
-        await ch.send({embeds:[new EmbedBuilder().setColor(C.info).setAuthor({name:'🎫 Système de Tickets'}).setDescription(['**Ouvre un ticket en sélectionnant une catégorie ci-dessous.**','','🚨 **Report** · 🎉 **Giveaway** · 💀 **Scam** · 📋 **Candidature**'].join('\n'))],components:[ticketSelectMenu(guild.id)]});
-      });
-      await sendIfEmpty(cm['📋┃règlement'], async ch => {
-        await ch.send({embeds:[new EmbedBuilder().setColor(C.primary).setAuthor({name:`📋 Règlement — ${guild.name}`}).setDescription(['**1.** Respect de tous les membres','**2.** Pas de spam, publicité ou NSFW','**3.** Vérification Roblox obligatoire pour trader','**4.** Screenshots obligatoires pour valider les trades','**5.** Les scams sont bannis définitivement'].join('\n')).setTimestamp()]});
-      });
-
-      await updateLeaderboards(guild).catch(()=>{});
-      await updateStatChannels(guild).catch(()=>{});
-
-      await finalReply([{
-        color: 0x57F287,
-        author: { name: '✅ Setup-Build Wenzy v8.0 terminé !' },
-        description: log.map(l=>`\`${l}\``).join('\n').slice(0,3900),
-        fields: [{
-          name: '📋 Résumé',
-          value: [`✅ ${roleCreated} rôles créés (${roleExisting} déjà présents)`,`🏗️ ${chCreated} salons créés (${chExisting} déjà présents)`,'','**Prochaine étape :** Donne-toi le rôle **Owners**'].join('\n'),
-        }],
-        timestamp: new Date().toISOString(),
-      }]);
     }
   },
 
@@ -2886,7 +2873,6 @@ const commands = [
       const ex = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
       if(ex) db.prepare('UPDATE users SET roblox_id=?,roblox_username=?,verify_code=?,verified=0 WHERE discord_id=?').run(String(rb.id),rb.name,code,did);
       else db.prepare('INSERT INTO users (discord_id,roblox_id,roblox_username,verify_code) VALUES (?,?,?,?)').run(did,String(rb.id),rb.name,code);
-      try{const nv=interaction.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');if(nv&&!interaction.member.roles.cache.has(nv.id))await interaction.member.roles.add(nv);}catch{}
       await interaction.editReply({
         embeds:[new EmbedBuilder().setColor(C.info)
           .setAuthor({name:'🔗 Vérification — Étape 1/2'})
@@ -3790,7 +3776,6 @@ async function handleModal(interaction) {
     const ex=db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
     if(ex)db.prepare('UPDATE users SET roblox_id=?,roblox_username=?,verify_code=?,verified=0 WHERE discord_id=?').run(String(rb.id),rb.name,code,did);
     else db.prepare('INSERT INTO users (discord_id,roblox_id,roblox_username,verify_code) VALUES (?,?,?,?)').run(did,String(rb.id),rb.name,code);
-    try{const nv=interaction.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');if(nv&&!interaction.member.roles.cache.has(nv.id))await interaction.member.roles.add(nv);}catch{}
     await interaction.editReply({
       embeds:[new EmbedBuilder().setColor(C.info).setAuthor({name:'🔗 Code généré !'}).setDescription([`Compte : **${rb.name}**`,'','**Code à coller dans ta bio Roblox :**',`\`\`\`${code}\`\`\``,'→ [Modifier ta bio](https://www.roblox.com/my/account#!/info)','','Reviens et clique Vérifier.'].join('\n'))],
       components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_verify_now').setLabel('✅ Vérifier maintenant').setStyle(ButtonStyle.Success))],
@@ -4010,13 +3995,11 @@ client.on(Events.VoiceStateUpdate, async(old,neu)=>{
 // ── MEMBER JOIN ──────────────────────────────────────────────
 client.on(Events.GuildMemberAdd, async member=>{
   try{
-    const nonv=member.guild.roles.cache.find(r=>r.name==='🔒 Non Vérifié');
-    if (nonv) await member.roles.add(nonv);
     const cfg=getConfig(member.guild.id);
     if (cfg?.welcome_enabled!==0) {
       const welcomeCh=cfg?.welcome_channel
         ?member.guild.channels.cache.get(cfg.welcome_channel)
-        :member.guild.channels.cache.find(c=>c.name.includes('chat')||c.name.includes('général'));
+        :member.guild.channels.cache.find(c=>c.name.includes('bienvenue')||c.name.includes('welcome'));
       if (welcomeCh) await welcomeCh.send({embeds:[welcomeEmbed(member,member.guild)]});
     }
     await handleAntiRaid(member.guild,member);
