@@ -3746,7 +3746,7 @@ const commands = [
   {
     data: new SlashCommandBuilder()
       .setName('updatetrades')
-      .setDescription('🔄 (Admin) Supprimer les anciens trades affichés et rafraîchir tous les trades ouverts dans post-trades')
+      .setDescription('🔄 (Admin) Rafraîchir tous les trades ouverts dans post-trades')
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     async execute(interaction) {
       await interaction.deferReply({ ephemeral:true });
