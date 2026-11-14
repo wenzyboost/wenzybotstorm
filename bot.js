@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  WENZY BOT v8.0 — bot.js
+//  WENZY BOT v9.0 — bot.js
 //  node bot.js
 //  npm install @napi-rs/canvas   ← requis pour les images level
 //  CHANGELOG v8.0 (sur base v7.5):
@@ -586,6 +586,43 @@ db.exec(`
   INSERT OR IGNORE INTO youtube_last (id,checked_at) VALUES (1,0);
 `);
 
+// ── NEW DB TABLES (v9.0) ─────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bans (
+    discord_id TEXT PRIMARY KEY,
+    moderator_id TEXT NOT NULL,
+    reason TEXT,
+    banned_at INTEGER DEFAULT (strftime('%s','now'))
+  );
+  CREATE TABLE IF NOT EXISTS blacklist (
+    discord_id TEXT PRIMARY KEY,
+    moderator_id TEXT NOT NULL,
+    reason TEXT,
+    blacklisted_at INTEGER DEFAULT (strftime('%s','now'))
+  );
+  CREATE TABLE IF NOT EXISTS locked_channels (
+    channel_id TEXT PRIMARY KEY,
+    locked_by TEXT NOT NULL,
+    locked_at INTEGER DEFAULT (strftime('%s','now'))
+  );
+  CREATE TABLE IF NOT EXISTS trade_ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    trade_id INTEGER,
+    rating INTEGER NOT NULL,
+    comment TEXT,
+    created_at INTEGER DEFAULT (strftime('%s','now'))
+  );
+  CREATE TABLE IF NOT EXISTS casino_stats (
+    discord_id TEXT PRIMARY KEY,
+    total_bet INTEGER DEFAULT 0,
+    total_won INTEGER DEFAULT 0,
+    total_lost INTEGER DEFAULT 0,
+    games_played INTEGER DEFAULT 0
+  );
+`);
+
 const safeMigrations = [
   'ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0',
   'ALTER TABLE users ADD COLUMN vocal_minutes INTEGER DEFAULT 0',
@@ -600,6 +637,72 @@ const safeMigrations = [
   'ALTER TABLE server_config ADD COLUMN ticket_categories TEXT DEFAULT \'["Report","Giveaway","Scam","Candidature"]\'',
 ];
 for (const m of safeMigrations) { try { db.exec(m); } catch {} }
+
+// ── HELPERS v9 ───────────────────────────────────────────────
+function isBlacklisted(userId) {
+  return !!db.prepare('SELECT 1 FROM blacklist WHERE discord_id=?').get(userId);
+}
+function isBanned(userId) {
+  return !!db.prepare('SELECT 1 FROM bans WHERE discord_id=?').get(userId);
+}
+function casinoStat(userId, bet, won) {
+  db.prepare('INSERT OR IGNORE INTO casino_stats (discord_id) VALUES (?)').run(userId);
+  if (won > 0) {
+    db.prepare('UPDATE casino_stats SET total_bet=total_bet+?,total_won=total_won+?,games_played=games_played+1 WHERE discord_id=?').run(bet, won, userId);
+  } else {
+    db.prepare('UPDATE casino_stats SET total_bet=total_bet+?,total_lost=total_lost+?,games_played=games_played+1 WHERE discord_id=?').run(bet, Math.abs(won), userId);
+  }
+}
+
+// ── HTML TRANSCRIPT BUILDER ───────────────────────────────────
+function buildHtmlTranscript(ticket, messages, guild) {
+  const rows = messages.sort((a,b)=>a[1].createdTimestamp-b[1].createdTimestamp).map(([,m])=>{
+    const time = new Date(m.createdTimestamp).toLocaleString('fr-FR');
+    const content = (m.content||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+    const hasAttach = m.attachments.size > 0;
+    const attachHtml = hasAttach ? [...m.attachments.values()].map(a=>
+      a.contentType?.startsWith('image/') ? `<img src="${a.url}" style="max-width:300px;border-radius:8px;margin-top:4px;" />` : `<a href="${a.url}" style="color:#00b0f4;">${a.name}</a>`
+    ).join('') : '';
+    return `<div class="msg"><div class="avatar">${m.author.username.charAt(0).toUpperCase()}</div><div class="bubble"><span class="user">${m.author.username}</span><span class="time">${time}</span><p>${content||'<em style="color:#72767d">[embed/pièce jointe]</em>'}</p>${attachHtml}</div></div>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Transcript #${String(ticket.id).padStart(4,'0')}</title><style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#313338;font-family:'Segoe UI',sans-serif;color:#dcddde;min-height:100vh}
+  .header{background:#1e1f22;padding:20px 32px;border-bottom:2px solid #5865f2;display:flex;align-items:center;gap:16px}
+  .header h1{font-size:1.3rem;color:#fff}.header .badge{background:#5865f2;color:#fff;padding:4px 10px;border-radius:12px;font-size:.8rem}
+  .meta{background:#2b2d31;padding:12px 32px;display:flex;gap:32px;flex-wrap:wrap;font-size:.85rem;color:#b5bac1}
+  .meta span strong{color:#dcddde}
+  .messages{padding:16px 32px;display:flex;flex-direction:column;gap:4px}
+  .msg{display:flex;align-items:flex-start;gap:12px;padding:4px 0;transition:background .1s}
+  .msg:hover{background:#2e3035;border-radius:4px}
+  .avatar{width:40px;height:40px;border-radius:50%;background:#5865f2;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;flex-shrink:0;font-size:1rem}
+  .bubble{flex:1}.user{font-weight:600;color:#fff;margin-right:8px}.time{font-size:.75rem;color:#72767d}
+  .bubble p{margin-top:3px;line-height:1.5;word-break:break-word}
+  .footer{text-align:center;padding:16px;color:#72767d;font-size:.8rem;border-top:1px solid #3f4046}
+  </style></head><body>
+  <div class="header"><div><h1>🎫 Transcript — Ticket #${String(ticket.id).padStart(4,'0')}</h1></div><span class="badge">${ticket.category}</span></div>
+  <div class="meta">
+    <span>🏠 Serveur : <strong>${guild.name}</strong></span>
+    <span>👤 Créateur : <strong>${ticket.creator_id}</strong></span>
+    <span>📋 Catégorie : <strong>${ticket.category}</strong></span>
+    <span>📅 Date : <strong>${new Date().toLocaleString('fr-FR')}</strong></span>
+  </div>
+  <div class="messages">${rows}</div>
+  <div class="footer">Wenzy Bot v9.0 — Transcript généré automatiquement</div>
+  </body></html>`;
+}
+
+// ── STAR RATING BUTTONS ───────────────────────────────────────
+function ratingButtons(tradeId, targetId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`rate_1_${tradeId}_${targetId}`).setLabel('⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`rate_2_${tradeId}_${targetId}`).setLabel('⭐⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`rate_3_${tradeId}_${targetId}`).setLabel('⭐⭐⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`rate_4_${tradeId}_${targetId}`).setLabel('⭐⭐⭐⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`rate_5_${tradeId}_${targetId}`).setLabel('⭐⭐⭐⭐⭐').setStyle(ButtonStyle.Success),
+  );
+}
 
 // Default weapon values
 const defaults = [
@@ -1220,6 +1323,7 @@ async function doVerify(interaction) {
 async function postTrade(interaction, did, offreStr, chercheStr, manualOfferVal, manualWantVal) {
   const user = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
   if (!user?.verified) return interaction.editReply('❌ Lie et vérifie ton compte Roblox dans **#lier-roblox** avant de trader.');
+  if (isBlacklisted(did)) return interaction.editReply('⛔ Tu es blacklisté des trades sur ce serveur. Contacte le staff.');
   const { total:autoOv, details:od } = calcValue(parseWeapons(offreStr));
   const { total:autoWv, details:wd } = calcValue(parseWeapons(chercheStr));
   const ov = manualOfferVal > 0 ? manualOfferVal : autoOv;
@@ -1344,7 +1448,54 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
   if(trade.thread_id){
     try{
       const t=await guild.channels.fetch(trade.thread_id).catch(()=>null);
-      if(t){await t.send('🎉 **Trade complété !** +50 🪙 | +1 vouch | +50 XP');setTimeout(async()=>{try{await t.setArchived(true,'Trade terminé');}catch{}},10000);}
+      if(t){
+        await t.send('🎉 **Trade complété !** +50 🪙 | +1 vouch | +50 XP');
+        setTimeout(async()=>{
+          try{
+            // Build HTML transcript of the trade thread
+            const tMsgs = await t.messages.fetch({limit:100}).catch(()=>null);
+            if(tMsgs){
+              const fakeTicket = {id:tradeId, category:'Trade', creator_id:trade.poster_id};
+              const html = buildHtmlTranscript(fakeTicket, [...tMsgs], guild);
+              const htmlPath = path.join(__dirname,`trade_${tradeId}_${Date.now()}.html`);
+              fs.writeFileSync(htmlPath, html, 'utf8');
+
+              const tradeEmb = new EmbedBuilder().setColor(C.success)
+                .setAuthor({name:`📦 Trade #${String(tradeId).padStart(4,'0')} — Transcript`})
+                .setDescription('> Le transcript de ton trade est joint. Note ton partenaire avec les boutons ci-dessous !')
+                .setFooter({text:'Wenzy Bot v9.0'})
+                .setTimestamp();
+
+              // DM to poster — with rating buttons for accepter
+              try{
+                const poster = await guild.client.users.fetch(trade.poster_id).catch(()=>null);
+                if(poster && trade.accepter_id){
+                  await poster.send({
+                    embeds:[tradeEmb],
+                    files:[{attachment:htmlPath,name:`trade-${tradeId}-transcript.html`}],
+                    components:[ratingButtons(tradeId, trade.accepter_id)],
+                  }).catch(()=>{});
+                }
+              }catch{}
+
+              // DM to accepter — with rating buttons for poster
+              try{
+                const accepter = await guild.client.users.fetch(trade.accepter_id).catch(()=>null);
+                if(accepter && trade.poster_id){
+                  await accepter.send({
+                    embeds:[tradeEmb],
+                    files:[{attachment:htmlPath,name:`trade-${tradeId}-transcript.html`}],
+                    components:[ratingButtons(tradeId, trade.poster_id)],
+                  }).catch(()=>{});
+                }
+              }catch{}
+
+              setTimeout(()=>fs.unlink(htmlPath,()=>{}),30000);
+            }
+            await t.setArchived(true,'Trade terminé');
+          }catch{}
+        },10000);
+      }
     }catch{}
   }
 
@@ -2068,11 +2219,32 @@ const commands = [
               '`/warn @membre <raison>` — Avertir',
               '`/warns @membre` — Voir les warns',
               '`/clearwarns @membre` — Effacer',
+              '`/clear <nb> [@membre]` — Supprimer messages',
+              '`/ban @membre <raison>` — Bannir + DM',
+              '`/unban <id> [raison]` — Débannir + DM',
+              '`/blacklist @membre <raison>` — Blacklister trades',
+              '`/unblacklist @membre` — Retirer blacklist',
+              '`/lockon [#salon]` — Verrouiller salon',
+              '`/lockoff [#salon]` — Déverrouiller salon',
+              '`/updateticket` — Rafraîchir embeds interactifs',
               '`/addxp` / `/addcoins` — Modifier XP/pièces',
               '`/giveaway start/end/reroll/list`',
               '`/addserver <lien>` — Ajouter serveur MM2',
+              '',
+              '**🎲 Casino**',
+              '`/slots <mise>` — Machine à sous',
+              '`/blackjack <mise>` — Blackjack interactif',
+              '`/roulette <mise> <pari>` — Roulette',
+              '`/crash <mise>` — Crash',
+              '`/mine <mise> <cases>` — Mines',
+              '`/horse <mise> <cheval>` — Course chevaux',
+              '`/jackpot <mise>` — Jackpot pool',
+              '',
+              '**⭐ Social**',
+              '`/avis [@membre]` — Voir les notes d\'un membre',
+              '`/transfer @membre <montant>` — Envoyer des pièces',
             ].join('\n'))
-            .setFooter({text:'Wenzy Bot v7.5  •  Commandes'})],
+            .setFooter({text:'Wenzy Bot v9.0  •  Commandes'})],
         });
         log.push('✅ Embed bot-cmds');
       }
@@ -3322,6 +3494,520 @@ const commands = [
     }
   },
 
+  // ── /clear ─────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('clear').setDescription('🧹 (Staff) Supprimer des messages').addIntegerOption(o=>o.setName('nombre').setDescription('Nombre de messages à supprimer (1-100)').setRequired(true).setMinValue(1).setMaxValue(100)).addUserOption(o=>o.setName('membre').setDescription('Supprimer seulement les messages de ce membre')).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!isModerator(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
+      const nombre = interaction.options.getInteger('nombre');
+      const targetUser = interaction.options.getUser('membre');
+      let msgs = await interaction.channel.messages.fetch({limit:100});
+      if (targetUser) msgs = msgs.filter(m=>m.author.id===targetUser.id);
+      const toDelete = [...msgs.values()].slice(0,nombre);
+      let deleted = 0;
+      try {
+        const bulkable = toDelete.filter(m=>Date.now()-m.createdTimestamp<1209600000);
+        const old = toDelete.filter(m=>Date.now()-m.createdTimestamp>=1209600000);
+        if (bulkable.length > 0) {
+          const result = await interaction.channel.bulkDelete(bulkable, true).catch(()=>null);
+          deleted += result?.size ?? 0;
+        }
+        for (const m of old) { await m.delete().catch(()=>{}); deleted++; }
+      } catch(e) { console.error('[Clear]',e.message); }
+      await sendLog(interaction.guild, new EmbedBuilder().setColor(C.warning).setAuthor({name:'🧹 Clear'}).addFields({name:'🗑️ Supprimés',value:`${deleted}`,inline:true},{name:'📍 Salon',value:`<#${interaction.channel.id}>`,inline:true},{name:'🛡️ Staff',value:`<@${interaction.user.id}>`,inline:true},...(targetUser?[{name:'👤 Ciblé',value:`<@${targetUser.id}>`,inline:true}]:[])).setTimestamp());
+      await interaction.editReply(`✅ **${deleted}** message(s) supprimé(s).`);
+    }
+  },
+
+  // ── /ban ───────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('ban').setDescription('🔨 (Admin) Bannir un membre').addUserOption(o=>o.setName('membre').setDescription('Membre à bannir').setRequired(true)).addStringOption(o=>o.setName('raison').setDescription('Raison du ban').setRequired(true)).addIntegerOption(o=>o.setName('jours').setDescription('Supprimer messages des X derniers jours (0-7)').setMinValue(0).setMaxValue(7)).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const target = interaction.options.getMember('membre');
+      const raison = interaction.options.getString('raison');
+      const jours = interaction.options.getInteger('jours') ?? 0;
+      if (!target) return interaction.editReply('❌ Membre introuvable.');
+      if (target.id === interaction.user.id) return interaction.editReply('❌ Tu ne peux pas te bannir toi-même.');
+      // DM avant le ban
+      try {
+        await target.send({
+          embeds:[new EmbedBuilder().setColor(C.danger).setAuthor({name:`🔨 Tu as été banni de ${interaction.guild.name}`}).addFields({name:'📋 Raison',value:raison,inline:false},{name:'🛡️ Par',value:interaction.user.username,inline:true},{name:'📅 Date',value:`<t:${Math.floor(Date.now()/1000)}:f>`,inline:true}).setDescription('> Si tu penses que c\'est une erreur, contacte un admin.').setFooter({text:'Wenzy Bot v9.0'}).setTimestamp()],
+        });
+      } catch {}
+      try {
+        await target.ban({ deleteMessageDays: jours, reason: raison });
+        db.prepare('INSERT OR REPLACE INTO bans (discord_id,moderator_id,reason) VALUES (?,?,?)').run(target.id, interaction.user.id, raison);
+        await sendLog(interaction.guild, new EmbedBuilder().setColor(0x000000).setAuthor({name:'🔨 Ban'}).addFields({name:'👤 Banni',value:`<@${target.id}> (${target.user.username})`,inline:true},{name:'📋 Raison',value:raison,inline:false},{name:'🛡️ Par',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
+        await interaction.editReply(`✅ **${target.user.username}** banni. Raison : ${raison}`);
+      } catch(e) { await interaction.editReply(`❌ Erreur : ${e.message}`); }
+    }
+  },
+
+  // ── /unban ─────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('unban').setDescription('🔓 (Admin) Débannir un membre').addStringOption(o=>o.setName('userid').setDescription('ID Discord du membre').setRequired(true)).addStringOption(o=>o.setName('raison').setDescription('Raison du débannissement')).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const userId = interaction.options.getString('userid');
+      const raison = interaction.options.getString('raison') ?? 'Débannissement par le staff';
+      try {
+        await interaction.guild.members.unban(userId, raison);
+        db.prepare('DELETE FROM bans WHERE discord_id=?').run(userId);
+        // DM après débannissement
+        try {
+          const unbanned = await interaction.client.users.fetch(userId).catch(()=>null);
+          if (unbanned) {
+            await unbanned.send({
+              embeds:[new EmbedBuilder().setColor(C.success).setAuthor({name:`✅ Tu as été débanni de ${interaction.guild.name}`}).addFields({name:'📋 Raison',value:raison,inline:false},{name:'🛡️ Par',value:interaction.user.username,inline:true}).setDescription('> Tu peux de nouveau rejoindre le serveur !').setFooter({text:'Wenzy Bot v9.0'}).setTimestamp()],
+            }).catch(()=>{});
+          }
+        } catch {}
+        await sendLog(interaction.guild, new EmbedBuilder().setColor(C.success).setAuthor({name:'🔓 Unban'}).addFields({name:'👤 Débanni',value:`\`${userId}\``,inline:true},{name:'📋 Raison',value:raison,inline:false},{name:'🛡️ Par',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
+        await interaction.editReply(`✅ Utilisateur \`${userId}\` débanni.`);
+      } catch(e) { await interaction.editReply(`❌ Erreur : ${e.message}`); }
+    }
+  },
+
+  // ── /blacklist ─────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('blacklist').setDescription('⛔ (Admin) Blacklister un membre des trades').addUserOption(o=>o.setName('membre').setDescription('Membre').setRequired(true)).addStringOption(o=>o.setName('raison').setDescription('Raison').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const target = interaction.options.getUser('membre');
+      const raison = interaction.options.getString('raison');
+      db.prepare('INSERT OR REPLACE INTO blacklist (discord_id,moderator_id,reason) VALUES (?,?,?)').run(target.id, interaction.user.id, raison);
+      try {
+        await target.send({
+          embeds:[new EmbedBuilder().setColor(C.danger).setAuthor({name:`⛔ Tu as été blacklisté des trades de ${interaction.guild.name}`}).addFields({name:'📋 Raison',value:raison,inline:false},{name:'🛡️ Par',value:interaction.user.username,inline:true}).setDescription('> Tu ne peux plus poster ni accepter de trades sur ce serveur.').setFooter({text:'Wenzy Bot v9.0'}).setTimestamp()],
+        }).catch(()=>{});
+      } catch {}
+      await sendLog(interaction.guild, new EmbedBuilder().setColor(C.danger).setAuthor({name:'⛔ Blacklist'}).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'📋 Raison',value:raison,inline:false},{name:'🛡️ Par',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
+      await interaction.editReply(`✅ <@${target.id}> blacklisté des trades.`);
+    }
+  },
+
+  // ── /unblacklist ───────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('unblacklist').setDescription('✅ (Admin) Retirer de la blacklist trades').addUserOption(o=>o.setName('membre').setDescription('Membre').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const target = interaction.options.getUser('membre');
+      db.prepare('DELETE FROM blacklist WHERE discord_id=?').run(target.id);
+      try {
+        await target.send({
+          embeds:[new EmbedBuilder().setColor(C.success).setAuthor({name:`✅ Tu as été retiré de la blacklist de ${interaction.guild.name}`}).setDescription('> Tu peux de nouveau poster et accepter des trades !').setFooter({text:'Wenzy Bot v9.0'}).setTimestamp()],
+        }).catch(()=>{});
+      } catch {}
+      await sendLog(interaction.guild, new EmbedBuilder().setColor(C.success).setAuthor({name:'✅ Unblacklist'}).addFields({name:'👤 Membre',value:`<@${target.id}>`,inline:true},{name:'🛡️ Par',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
+      await interaction.editReply(`✅ <@${target.id}> retiré de la blacklist.`);
+    }
+  },
+
+  // ── /lockon ────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('lockon').setDescription('🔒 (Staff) Lock un ou plusieurs salons').addChannelOption(o=>o.setName('salon').setDescription('Salon à lock (vide = salon actuel)')).setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!isModerator(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
+      const targetCh = interaction.options.getChannel('salon') ?? interaction.channel;
+      if (targetCh.type !== ChannelType.GuildText && targetCh.type !== ChannelType.GuildAnnouncement) return interaction.editReply('❌ Ce type de salon ne peut pas être locké.');
+      await targetCh.permissionOverwrites.edit(interaction.guild.id, {SendMessages: false}).catch(()=>{});
+      db.prepare('INSERT OR REPLACE INTO locked_channels (channel_id,locked_by) VALUES (?,?)').run(targetCh.id, interaction.user.id);
+      await targetCh.send({embeds:[new EmbedBuilder().setColor(C.danger).setDescription(`🔒 **Salon verrouillé par <@${interaction.user.id}>**\nPersonne ne peut plus écrire ici.`).setTimestamp()]}).catch(()=>{});
+      await sendLog(interaction.guild, new EmbedBuilder().setColor(C.danger).setAuthor({name:'🔒 Salon locké'}).addFields({name:'📍 Salon',value:`<#${targetCh.id}>`,inline:true},{name:'🛡️ Par',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
+      await interaction.editReply(`✅ <#${targetCh.id}> verrouillé.`);
+    }
+  },
+
+  // ── /lockoff ───────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('lockoff').setDescription('🔓 (Staff) Déverrouiller un salon').addChannelOption(o=>o.setName('salon').setDescription('Salon à délock (vide = salon actuel)')).setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!isModerator(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
+      const targetCh = interaction.options.getChannel('salon') ?? interaction.channel;
+      await targetCh.permissionOverwrites.edit(interaction.guild.id, {SendMessages: null}).catch(()=>{});
+      db.prepare('DELETE FROM locked_channels WHERE channel_id=?').run(targetCh.id);
+      await targetCh.send({embeds:[new EmbedBuilder().setColor(C.success).setDescription(`🔓 **Salon déverrouillé par <@${interaction.user.id}>**`).setTimestamp()]}).catch(()=>{});
+      await sendLog(interaction.guild, new EmbedBuilder().setColor(C.success).setAuthor({name:'🔓 Salon délocké'}).addFields({name:'📍 Salon',value:`<#${targetCh.id}>`,inline:true},{name:'🛡️ Par',value:`<@${interaction.user.id}>`,inline:true}).setTimestamp());
+      await interaction.editReply(`✅ <#${targetCh.id}> déverrouillé.`);
+    }
+  },
+
+  // ── /updateticket ──────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('updateticket').setDescription('🔄 (Admin) Rafraîchir les embeds interactifs sans toucher les rôles').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const guild = interaction.guild;
+      const done = [];
+      // Ticket panel
+      const ticketCh = guild.channels.cache.find(c=>c.name.includes('ticket'));
+      if (ticketCh) {
+        const msgs = await ticketCh.messages.fetch({limit:10});
+        for (const m of msgs.values()) if(m.author.bot && m.components?.length) await m.delete().catch(()=>{});
+        await ticketCh.send({
+          embeds:[new EmbedBuilder().setColor(C.info).setAuthor({name:'🎫 Système de Tickets — Wenzy MM2'}).setDescription(['> Ouvre un ticket selon ta situation.','',...getTicketCategories(guild.id).map(c=>`${ticketCategoryEmoji(c)} **${c}**`)].join('\n')).setFooter({text:'Wenzy Bot v9.0 • Tickets'}).setTimestamp()],
+          components:[ticketSelectMenu(guild.id)],
+        }).catch(()=>{});
+        done.push('ticket');
+      }
+      // Boutique
+      const boutiqueCh = guild.channels.cache.find(c=>c.name.includes('boutique'));
+      if (boutiqueCh) { await postShopEmbed(boutiqueCh); done.push('boutique'); }
+      // Lier-roblox
+      const lierCh = guild.channels.cache.find(c=>c.name.includes('lier-roblox'));
+      if (lierCh) {
+        const lierMsgs = await lierCh.messages.fetch({limit:10});
+        for (const m of lierMsgs.values()) if(m.author.bot && m.components?.length) await m.delete().catch(()=>{});
+        await lierCh.send({
+          embeds:[new EmbedBuilder().setColor(C.primary).setAuthor({name:'🔗 Vérification Roblox'}).setDescription('Clique le bouton pour lier ton compte Roblox et accéder aux trades.').setFooter({text:'Wenzy Bot v9.0'}).setTimestamp()],
+          components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_link_start').setLabel('🔗 Lier mon compte Roblox').setStyle(ButtonStyle.Primary))],
+        }).catch(()=>{});
+        done.push('lier-roblox');
+      }
+      // Poster-un-trade
+      const tradeCh = guild.channels.cache.find(c=>c.name.includes('poster-un-trade'));
+      if (tradeCh) {
+        const tradeMsgs = await tradeCh.messages.fetch({limit:10});
+        for (const m of tradeMsgs.values()) if(m.author.bot && m.components?.length) await m.delete().catch(()=>{});
+        await tradeCh.send({
+          embeds:[new EmbedBuilder().setColor(C.gold).setAuthor({name:'📬 Poster un Trade MM2'}).setDescription('Clique le bouton pour poster ton trade avec le formulaire.').setFooter({text:'Wenzy Bot v9.0'}).setTimestamp()],
+          components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('btn_post_trade').setLabel('📬 Poster un Trade').setStyle(ButtonStyle.Success))],
+        }).catch(()=>{});
+        done.push('poster-un-trade');
+      }
+      await interaction.editReply(`✅ Embeds rafraîchis : **${done.join(', ')}**`);
+    }
+  },
+
+  // ── /avis ──────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('avis').setDescription('⭐ Voir tous les avis d\'un membre').addUserOption(o=>o.setName('membre').setDescription('Membre').setRequired(false)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const target = interaction.options.getUser('membre') ?? interaction.user;
+      const ratings = db.prepare('SELECT * FROM trade_ratings WHERE to_id=? ORDER BY created_at DESC').all(target.id);
+      const avg = db.prepare('SELECT AVG(rating) as avg, COUNT(*) as cnt FROM trade_ratings WHERE to_id=?').get(target.id);
+      const stars1 = ratings.filter(r=>r.rating===1).length;
+      const stars2 = ratings.filter(r=>r.rating===2).length;
+      const stars3 = ratings.filter(r=>r.rating===3).length;
+      const stars4 = ratings.filter(r=>r.rating===4).length;
+      const stars5 = ratings.filter(r=>r.rating===5).length;
+      const avgNum = avg.avg ?? 0;
+      const repBarLen = 20;
+      const filled = Math.round((avgNum/5)*repBarLen);
+      const repBar = `${'█'.repeat(filled)}${'░'.repeat(repBarLen-filled)}`;
+      const lastFive = ratings.slice(0,5).map(r=>`> ${'⭐'.repeat(r.rating)} — <@${r.from_id}> <t:${r.created_at}:R>${r.comment?` — *${r.comment}*`:''}`).join('\n');
+
+      const embed = new EmbedBuilder()
+        .setColor(avgNum>=4?C.success:avgNum>=3?C.warning:C.danger)
+        .setAuthor({name:`⭐ Avis — ${target.username}`, iconURL: target.displayAvatarURL()})
+        .setThumbnail(target.displayAvatarURL())
+        .addFields(
+          {name:'📊 Moyenne générale',value:`**${avgNum.toFixed(2)}/5** ⭐ (${avg.cnt} avis)\n\`[${repBar}]\``,inline:false},
+          {name:'📈 Répartition',value:[`⭐ — ${stars1}`,`⭐⭐ — ${stars2}`,`⭐⭐⭐ — ${stars3}`,`⭐⭐⭐⭐ — ${stars4}`,`⭐⭐⭐⭐⭐ — ${stars5}`].join('\n'),inline:true},
+          {name:'🗡️ Stats trades',value:`Trades : **${db.prepare('SELECT trade_count FROM users WHERE discord_id=?').get(target.id)?.trade_count??0}**\nVouches : **${db.prepare('SELECT vouch_count FROM users WHERE discord_id=?').get(target.id)?.vouch_count??0}**`,inline:true},
+          ...(lastFive?[{name:'🕒 Derniers avis',value:lastFive,inline:false}]:[]),
+        )
+        .setFooter({text:'Wenzy Bot v9.0 • Système d\'avis'})
+        .setTimestamp();
+      await interaction.editReply({embeds:[embed]});
+    }
+  },
+
+  // ── /transfer ──────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('transfer').setDescription('💸 Envoyer des pièces à un autre membre').addUserOption(o=>o.setName('membre').setDescription('Destinataire').setRequired(true)).addIntegerOption(o=>o.setName('montant').setDescription('Montant à envoyer').setRequired(true).setMinValue(1)),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      const target = interaction.options.getUser('membre');
+      const amount = interaction.options.getInteger('montant');
+      const did = interaction.user.id;
+      if (target.id === did) return interaction.editReply('❌ Tu ne peux pas te transférer des pièces à toi-même.');
+      if (target.bot) return interaction.editReply('❌ Les bots ne reçoivent pas de pièces.');
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(target.id);
+      const sender = db.prepare('SELECT coins FROM users WHERE discord_id=?').get(did);
+      if ((sender?.coins??0) < amount) return interaction.editReply(`❌ Pas assez de pièces (**${sender?.coins??0} 🪙**).`);
+      db.prepare('UPDATE users SET coins=coins-? WHERE discord_id=?').run(amount, did);
+      db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(amount, target.id);
+      const newSenderCoins = db.prepare('SELECT coins FROM users WHERE discord_id=?').get(did)?.coins ?? 0;
+      const newTargetCoins = db.prepare('SELECT coins FROM users WHERE discord_id=?').get(target.id)?.coins ?? 0;
+      // DM au destinataire
+      try {
+        await target.send({
+          embeds:[new EmbedBuilder().setColor(C.success)
+            .setAuthor({name:'🪙 Transfert reçu !'})
+            .setDescription(`<@${did}> t'a envoyé **${amount.toLocaleString('fr-FR')} 🪙** !`)
+            .addFields({name:'💰 Nouveau solde',value:`**${newTargetCoins.toLocaleString('fr-FR')} 🪙**`,inline:true})
+            .setFooter({text:'Wenzy Bot v9.0'}).setTimestamp()],
+        }).catch(()=>{});
+      } catch {}
+      await sendLog(interaction.guild, new EmbedBuilder().setColor(C.info).setDescription(`💸 Transfert : <@${did}> → <@${target.id}> — **${amount} 🪙**`).setTimestamp());
+      await interaction.editReply(`✅ **${amount.toLocaleString('fr-FR')} 🪙** envoyés à <@${target.id}> !\nTon nouveau solde : **${newSenderCoins.toLocaleString('fr-FR')} 🪙**`);
+    }
+  },
+
+  // ══════════════════════════════════════════════════════════════
+  //  CASINO COMMANDS
+  // ══════════════════════════════════════════════════════════════
+
+  // ── /slots ─────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('slots').setDescription('🎰 Machine à sous — Tente ta chance !').addIntegerOption(o=>o.setName('mise').setDescription('Mise (min 10 🪙)').setRequired(true).setMinValue(10)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const did = interaction.user.id, mise = interaction.options.getInteger('mise');
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
+      const user = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+      if ((user?.coins??0) < mise) return interaction.editReply('❌ Pas assez de pièces.');
+      const symbols = ['🍒','🍋','🍇','💎','7️⃣','⭐','🎰'];
+      const weights =  [25,   20,   18,   10,   8,   12,   7];
+      function spin() {
+        const total = weights.reduce((a,b)=>a+b,0);
+        let r = Math.random()*total;
+        for (let i=0;i<symbols.length;i++){r-=weights[i];if(r<=0)return i;}
+        return 0;
+      }
+      const r1=spin(),r2=spin(),r3=spin();
+      const s = [symbols[r1],symbols[r2],symbols[r3]];
+      let multiplier = 0, label = 'RIEN';
+      if (r1===r2&&r2===r3){
+        const mults=[2,2,3,5,8,4,10];
+        multiplier=mults[r1];label=`JACKPOT ${s[0]}${s[1]}${s[2]} × ${multiplier}!`;
+      } else if (r1===r2||r2===r3||r1===r3){
+        multiplier=1.5;label=`PAIRE ${s[0]}${s[1]}${s[2]} × 1.5`;
+      }
+      const delta = multiplier>0?Math.floor(mise*multiplier)-mise:-mise;
+      db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(delta,did);
+      casinoStat(did,mise,delta);
+      const newCoins=(user.coins??0)+delta;
+      await interaction.editReply({embeds:[new EmbedBuilder().setColor(delta>0?C.success:delta===0?C.warning:C.danger)
+        .setAuthor({name:'🎰 Machine à Sous — Wenzy Casino'})
+        .setDescription(`╔══════════════╗\n║  ${s[0]}  ${s[1]}  ${s[2]}  ║\n╚══════════════╝`)
+        .addFields(
+          {name:'🎲 Résultat',value:label,inline:false},
+          {name:delta>0?'💰 Gains':'💸 Pertes',value:`${delta>0?'+':''}${delta.toLocaleString('fr-FR')} 🪙`,inline:true},
+          {name:'💰 Solde',value:`${newCoins.toLocaleString('fr-FR')} 🪙`,inline:true},
+        ).setFooter({text:'Wenzy Casino v9.0'}).setTimestamp()]});
+    }
+  },
+
+  // ── /blackjack ─────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('blackjack').setDescription('🃏 Blackjack — 21 ou bust').addIntegerOption(o=>o.setName('mise').setDescription('Mise (min 20 🪙)').setRequired(true).setMinValue(20)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const did = interaction.user.id, mise = interaction.options.getInteger('mise');
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
+      const user = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+      if ((user?.coins??0)<mise) return interaction.editReply('❌ Pas assez de pièces.');
+      const deck=['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+      const vals={'A':11,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':10,'Q':10,'K':10};
+      function draw(){return deck[Math.floor(Math.random()*deck.length)];}
+      function score(h){let s=h.reduce((a,c)=>a+vals[c],0);let aces=h.filter(c=>c==='A').length;while(s>21&&aces-->0)s-=10;return s;}
+      let p=[draw(),draw()],d=[draw(),'?'];
+      const ps=score(p);
+      // Dealer's hidden card logic stored in customId
+      const realD2=draw();
+      const bjId=`bj_${did}_${Date.now()}`;
+      // Store game in map (ephemeral, in-memory)
+      if(!interaction.client._bjGames)interaction.client._bjGames=new Map();
+      interaction.client._bjGames.set(bjId,{p,dealer:[d[0],realD2],mise,userId:did});
+      const embed=new EmbedBuilder().setColor(C.purple).setAuthor({name:'🃏 Blackjack — Wenzy Casino'})
+        .addFields({name:'🎴 Votre main',value:`${p.join(' ')} (${ps})`,inline:true},{name:'🤖 Croupier',value:`${d[0]} ?`,inline:true})
+        .setFooter({text:`Mise : ${mise} 🪙`});
+      if(ps===21){embed.setDescription('**BLACKJACK NATUREL ! 🎉**');const gain=Math.floor(mise*1.5);db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(gain,did);casinoStat(did,mise,gain);embed.addFields({name:'💰 Gain',value:`+${gain} 🪙`,inline:true});interaction.client._bjGames.delete(bjId);return interaction.editReply({embeds:[embed]});}
+      await interaction.editReply({embeds:[embed],components:[new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`bj_hit_${bjId}`).setLabel('🃏 Tirer').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`bj_stand_${bjId}`).setLabel('✋ Rester').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`bj_double_${bjId}`).setLabel('⚡ Doubler').setStyle(ButtonStyle.Success),
+      )]});
+    }
+  },
+
+  // ── /roulette ──────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('roulette').setDescription('🎡 Roulette — Rouge/Noir ou Numéro').addIntegerOption(o=>o.setName('mise').setDescription('Mise (min 10 🪙)').setRequired(true).setMinValue(10)).addStringOption(o=>o.setName('pari').setDescription('Pari : rouge, noir, pair, impair, 0-36').setRequired(true)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const did=interaction.user.id,mise=interaction.options.getInteger('mise'),pari=interaction.options.getString('pari').toLowerCase().trim();
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
+      const user=db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+      if((user?.coins??0)<mise)return interaction.editReply('❌ Pas assez de pièces.');
+      const number=Math.floor(Math.random()*37);
+      const reds=[1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+      const isRed=reds.includes(number);
+      const color=number===0?'🟢 Vert':isRed?'🔴 Rouge':'⚫ Noir';
+      let multiplier=0,label='Perdu';
+      if(pari==='rouge'&&isRed&&number!==0){multiplier=2;label='✅ Rouge';}
+      else if(pari==='noir'&&!isRed&&number!==0){multiplier=2;label='✅ Noir';}
+      else if(pari==='pair'&&number!==0&&number%2===0){multiplier=2;label='✅ Pair';}
+      else if(pari==='impair'&&number%2===1){multiplier=2;label='✅ Impair';}
+      else{const n=parseInt(pari);if(!isNaN(n)&&n>=0&&n<=36&&n===number){multiplier=36;label=`✅ Numéro exact (×36)`;}}
+      const delta=multiplier>0?mise*(multiplier-1):-mise;
+      db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(delta,did);
+      casinoStat(did,mise,delta);
+      const newCoins=(user.coins??0)+delta;
+      await interaction.editReply({embeds:[new EmbedBuilder().setColor(number===0?C.success:isRed?C.danger:C.dark)
+        .setAuthor({name:'🎡 Roulette — Wenzy Casino'})
+        .addFields({name:'🎯 Numéro sorti',value:`**${number}** ${color}`,inline:true},{name:'🎰 Ton pari',value:pari,inline:true},{name:'📊 Résultat',value:label,inline:false},{name:delta>=0?'💰 Gains':'💸 Pertes',value:`${delta>=0?'+':''}${delta.toLocaleString('fr-FR')} 🪙`,inline:true},{name:'💰 Solde',value:`${newCoins.toLocaleString('fr-FR')} 🪙`,inline:true})
+        .setFooter({text:'Wenzy Casino v9.0'}).setTimestamp()]});
+    }
+  },
+
+  // ── /crash ─────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('crash').setDescription('📈 Crash — Cashout avant le crash !').addIntegerOption(o=>o.setName('mise').setDescription('Mise (min 10 🪙)').setRequired(true).setMinValue(10)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const did=interaction.user.id,mise=interaction.options.getInteger('mise');
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
+      const user=db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+      if((user?.coins??0)<mise)return interaction.editReply('❌ Pas assez de pièces.');
+      // Generate crash point: exponential distribution skewed low
+      const crash=Math.max(1.0,+(Math.pow(Math.random(),-0.5)*1.2).toFixed(2));
+      // Cashout at random multiplier (simulate user cashing out)
+      const cashout=+(1+(Math.random()*(crash-1))).toFixed(2);
+      const won=cashout<crash;
+      let delta=0;
+      if(won){delta=Math.floor(mise*(cashout-1));}else{delta=-mise;}
+      db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(delta,did);
+      casinoStat(did,mise,delta);
+      const newCoins=(user.coins??0)+delta;
+      await interaction.editReply({embeds:[new EmbedBuilder().setColor(won?C.success:C.danger)
+        .setAuthor({name:'📈 Crash — Wenzy Casino'})
+        .addFields(
+          {name:'💥 Crash à',value:`**×${crash}**`,inline:true},
+          {name:'🏃 Cashout à',value:`**×${cashout}**`,inline:true},
+          {name:'📊 Résultat',value:won?`✅ Cashout réussi — ×${cashout}`:`❌ Crashed avant ton cashout`,inline:false},
+          {name:delta>=0?'💰 Gains':'💸 Pertes',value:`${delta>=0?'+':''}${delta.toLocaleString('fr-FR')} 🪙`,inline:true},
+          {name:'💰 Solde',value:`${newCoins.toLocaleString('fr-FR')} 🪙`,inline:true},
+        ).setFooter({text:'Wenzy Casino v9.0'}).setTimestamp()]});
+    }
+  },
+
+  // ── /mine ──────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('mine').setDescription('💣 Mines — Évite les bombes pour multiplier !').addIntegerOption(o=>o.setName('mise').setDescription('Mise (min 10 🪙)').setRequired(true).setMinValue(10)).addIntegerOption(o=>o.setName('cases').setDescription('Cases à révéler (1-10)').setRequired(true).setMinValue(1).setMaxValue(10)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const did=interaction.user.id,mise=interaction.options.getInteger('mise'),cases=interaction.options.getInteger('cases');
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
+      const user=db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+      if((user?.coins??0)<mise)return interaction.editReply('❌ Pas assez de pièces.');
+      const GRID=25,BOMBS=5;
+      const bombs=new Set();
+      while(bombs.size<BOMBS)bombs.add(Math.floor(Math.random()*GRID));
+      let hit=false,safeFound=0;
+      const revealed=[];
+      for(let i=0;i<cases;i++){
+        let cell;do{cell=Math.floor(Math.random()*GRID);}while(revealed.includes(cell));
+        revealed.push(cell);
+        if(bombs.has(cell)){hit=true;break;}
+        safeFound++;
+      }
+      // Multiplier calculation: each safe cell = ×1.3
+      const multiplier=Math.pow(1.3,safeFound);
+      const delta=hit?-mise:Math.floor(mise*(multiplier-1));
+      db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(delta,did);
+      casinoStat(did,mise,delta);
+      const newCoins=(user.coins??0)+delta;
+      const grid=Array(25).fill('⬛');
+      for(const r of revealed)grid[r]=bombs.has(r)?'💣':hit?'⬛':'💎';
+      await interaction.editReply({embeds:[new EmbedBuilder().setColor(hit?C.danger:C.success)
+        .setAuthor({name:'💣 Mines — Wenzy Casino'})
+        .setDescription(grid.map((c,i)=>c+(((i+1)%5===0)?'\n':'')).join(' '))
+        .addFields(
+          {name:'💎 Cases sûres',value:`${safeFound}/${cases}`,inline:true},
+          {name:'📊 Résultat',value:hit?`💣 Mine touchée !`:`✅ ${safeFound} cases sûres ! ×${multiplier.toFixed(2)}`,inline:false},
+          {name:delta>=0?'💰 Gains':'💸 Pertes',value:`${delta>=0?'+':''}${delta.toLocaleString('fr-FR')} 🪙`,inline:true},
+          {name:'💰 Solde',value:`${newCoins.toLocaleString('fr-FR')} 🪙`,inline:true},
+        ).setFooter({text:'Wenzy Casino v9.0'}).setTimestamp()]});
+    }
+  },
+
+  // ── /horse ─────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('horse').setDescription('🏇 Course de chevaux — Mise sur le gagnant !').addIntegerOption(o=>o.setName('mise').setDescription('Mise (min 10 🪙)').setRequired(true).setMinValue(10)).addIntegerOption(o=>o.setName('cheval').setDescription('Cheval (1-6)').setRequired(true).setMinValue(1).setMaxValue(6)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const did=interaction.user.id,mise=interaction.options.getInteger('mise'),choix=interaction.options.getInteger('cheval');
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
+      const user=db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+      if((user?.coins??0)<mise)return interaction.editReply('❌ Pas assez de pièces.');
+      const horses=['🐴','🏇','🦄','🐎','🐻','🦊'];
+      const names=['Tonnerre','Éclair','Mistral','Tornado','Foudre','Vent'];
+      const odds=[2,3,4,5,6,8]; // multipliers
+      const winner=Math.floor(Math.random()*6)+1;
+      const won=winner===choix;
+      const delta=won?mise*(odds[choix-1]-1):-mise;
+      db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(delta,did);
+      casinoStat(did,mise,delta);
+      const newCoins=(user.coins??0)+delta;
+      const positions=horses.map((h,i)=>({h,name:names[i],n:i+1,pos:Math.random()})).sort((a,b)=>b.pos-a.pos);
+      await interaction.editReply({embeds:[new EmbedBuilder().setColor(won?C.success:C.danger)
+        .setAuthor({name:'🏇 Course de Chevaux — Wenzy Casino'})
+        .setDescription(positions.map((p,i)=>`**${i+1}.** ${p.h} **${p.name}** (#${p.n} — ×${odds[p.n-1]})${p.n===winner?' 🏆':p.n===choix?' 👈 Ton cheval':''}`).join('\n'))
+        .addFields(
+          {name:'🏆 Gagnant',value:`${horses[winner-1]} **${names[winner-1]}** (#${winner})`,inline:true},
+          {name:'🎯 Ton cheval',value:`${horses[choix-1]} **${names[choix-1]}** (#${choix} — ×${odds[choix-1]})`,inline:true},
+          {name:delta>=0?'💰 Gains':'💸 Pertes',value:`${delta>=0?'+':''}${delta.toLocaleString('fr-FR')} 🪙`,inline:true},
+          {name:'💰 Solde',value:`${newCoins.toLocaleString('fr-FR')} 🪙`,inline:true},
+        ).setFooter({text:'Wenzy Casino v9.0'}).setTimestamp()]});
+    }
+  },
+
+  // ── /jackpot ───────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder().setName('jackpot').setDescription('💰 Jackpot — Mise pour tenter de tout gagner !').addIntegerOption(o=>o.setName('mise').setDescription('Mise (min 50 🪙)').setRequired(true).setMinValue(50)),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const did=interaction.user.id,mise=interaction.options.getInteger('mise');
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
+      const user=db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+      if((user?.coins??0)<mise)return interaction.editReply('❌ Pas assez de pièces.');
+      // Pool is sum of all bets × 0.8, stored running
+      db.prepare('INSERT OR IGNORE INTO casino_stats (discord_id) VALUES (?)').run('__jackpot_pool__');
+      db.prepare('UPDATE casino_stats SET total_bet=total_bet+? WHERE discord_id=?').run(mise,'__jackpot_pool__');
+      const pool=db.prepare('SELECT total_bet FROM casino_stats WHERE discord_id=?').get('__jackpot_pool__')?.total_bet??0;
+      // 1% chance to win jackpot
+      const jackpotChance=0.01;
+      const won=Math.random()<jackpotChance;
+      let delta, label;
+      if(won){
+        const jackpotWin=Math.floor(pool*0.8);
+        delta=jackpotWin;
+        label=`🎉 **JACKPOT !** Tu gagnes **${jackpotWin.toLocaleString('fr-FR')} 🪙** (pool accumulé) !`;
+        db.prepare('UPDATE casino_stats SET total_bet=0 WHERE discord_id=?').run('__jackpot_pool__');
+      } else {
+        // Small consolation prize on near-miss (10% chance)
+        const nearMiss=Math.random()<0.1;
+        if(nearMiss){delta=Math.floor(mise*0.5);label=`🤏 Presque ! Tu récupères **${delta} 🪙** de consolation.`;}
+        else{delta=-mise;label=`❌ Pas de jackpot cette fois...\n💰 Pool actuel : **${pool.toLocaleString('fr-FR')} 🪙**`;}
+      }
+      db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(delta,did);
+      casinoStat(did,mise,delta>0?delta:-mise);
+      const newCoins=(user.coins??0)+delta;
+      await interaction.editReply({embeds:[new EmbedBuilder().setColor(won?C.gold:delta>0?C.warning:C.danger)
+        .setAuthor({name:'💰 Jackpot — Wenzy Casino'})
+        .setDescription(label)
+        .addFields(
+          {name:'🎰 Ta mise',value:`${mise.toLocaleString('fr-FR')} 🪙`,inline:true},
+          {name:'💰 Nouveau solde',value:`${newCoins.toLocaleString('fr-FR')} 🪙`,inline:true},
+          ...(!won?[{name:'🏆 Pool actuel',value:`${pool.toLocaleString('fr-FR')} 🪙`,inline:true}]:[]),
+        ).setFooter({text:'Wenzy Casino v9.0 • 1% de chances de tout gagner !'}).setTimestamp()]});
+    }
+  },
+
   // ── /massrole ──────────────────────────────────────────────
   {
     data: new SlashCommandBuilder().setName('massrole').setDescription('⚡ (Admin) Donner ou retirer un rôle à tous les membres')
@@ -3390,6 +4076,53 @@ const commands = [
 // ══════════════════════════════════════════════════════════════
 async function handleButton(interaction) {
   const { customId, guild, user } = interaction;
+
+  // ── BLACKJACK BUTTONS ─────────────────────────────────────────
+  if (customId.startsWith('bj_hit_')||customId.startsWith('bj_stand_')||customId.startsWith('bj_double_')) {
+    await interaction.deferUpdate().catch(()=>{});
+    const bjId = customId.split('_').slice(2).join('_');
+    const game = interaction.client._bjGames?.get(bjId);
+    if (!game || game.userId !== user.id) return;
+    const deck=['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+    const vals={'A':11,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,'J':10,'Q':10,'K':10};
+    function draw(){return deck[Math.floor(Math.random()*deck.length)];}
+    function score(h){let s=h.reduce((a,c)=>a+vals[c],0);let aces=h.filter(c=>c==='A').length;while(s>21&&aces-->0)s-=10;return s;}
+    let {p,dealer,mise} = game;
+    let action='';
+    if (customId.startsWith('bj_hit_')) { p.push(draw()); action='hit'; }
+    else if (customId.startsWith('bj_double_')) { p.push(draw()); mise*=2; game.mise=mise; action='double'; }
+    else { action='stand'; }
+    const ps=score(p);
+    // Dealer plays
+    let result='playing',delta=0;
+    if (ps>21||action==='stand'||action==='double') {
+      let ds=score(dealer);
+      while(ds<17){dealer.push(draw());ds=score(dealer);}
+      if(ps>21){result='bust';delta=-mise;}
+      else if(ds>21){result='dealer_bust';delta=mise;}
+      else if(ps>ds){result='win';delta=mise;}
+      else if(ps===ds){result='push';delta=0;}
+      else{result='lose';delta=-mise;}
+      db.prepare('UPDATE users SET coins=coins+? WHERE discord_id=?').run(delta,user.id);
+      casinoStat(user.id,mise,delta);
+      interaction.client._bjGames.delete(bjId);
+    }
+    const still=result==='playing';
+    const newCoins=(db.prepare('SELECT coins FROM users WHERE discord_id=?').get(user.id)?.coins??0);
+    const resultLabels={bust:'💥 Bust !',dealer_bust:'🎉 Croupier bust !',win:'✅ Gagné !',push:'🤝 Égalité.',lose:'❌ Perdu.',playing:'🃏 En cours...'};
+    const embed=new EmbedBuilder().setColor(result==='playing'?C.purple:delta>0?C.success:delta===0?C.warning:C.danger)
+      .setAuthor({name:'🃏 Blackjack — Wenzy Casino'})
+      .addFields(
+        {name:'🎴 Votre main',value:`${p.join(' ')} (${ps})`,inline:true},
+        {name:'🤖 Croupier',value:still?`${dealer[0]} ? (?)`:`${dealer.join(' ')} (${score(dealer)})`,inline:true},
+        ...(result!=='playing'?[{name:'📊 Résultat',value:`${resultLabels[result]} ${delta!==0?(delta>0?`+${delta}`:`${delta}`)+' 🪙':''}`,inline:false},{name:'💰 Solde',value:`${newCoins.toLocaleString('fr-FR')} 🪙`,inline:true}]:[]),
+      ).setFooter({text:`Mise: ${mise} 🪙 | Wenzy Casino v9.0`});
+    await interaction.editReply({embeds:[embed],components:still?[new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`bj_hit_${bjId}`).setLabel('🃏 Tirer').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`bj_stand_${bjId}`).setLabel('✋ Rester').setStyle(ButtonStyle.Secondary),
+    )]:[]}).catch(()=>{});
+    return;
+  }
 
   if (customId === 'btn_link_start') {
     const modal = new ModalBuilder().setCustomId('modal_link_roblox').setTitle('🔗 Lier ton compte Roblox');
@@ -3514,9 +4247,16 @@ async function handleButton(interaction) {
     db.prepare(`UPDATE tickets SET status='closed',closed_at=strftime('%s','now') WHERE id=?`).run(ticketId);
     const tCh=guild.channels.cache.get(ticket.channel_id);
     if (tCh) {
-      // ── TRANSCRIPT .TXT ──
+      // ── TRANSCRIPT HTML + TXT ──
       try{
         const msgs=await tCh.messages.fetch({limit:100});
+
+        // Build HTML
+        const htmlContent = buildHtmlTranscript(ticket, [...msgs], guild);
+        const htmlPath=path.join(__dirname,`transcript_${ticketId}_${Date.now()}.html`);
+        fs.writeFileSync(htmlPath, htmlContent, 'utf8');
+
+        // Build TXT backup
         const lines=[
           `╔══════════════════════════════════════════╗`,
           `  TRANSCRIPT — Ticket #${String(ticketId).padStart(4,'0')}`,
@@ -3529,42 +4269,62 @@ async function handleButton(interaction) {
           '',
           '── MESSAGES ────────────────────────────────',
           '',
-          ...msgs.sort((a,b)=>a[1].createdTimestamp-b[1].createdTimestamp)
+          ...[...msgs].sort((a,b)=>a[1].createdTimestamp-b[1].createdTimestamp)
             .map(([,m])=>`[${new Date(m.createdTimestamp).toLocaleString('fr-FR')}] ${m.author.username}: ${m.content||'[embed/pièce jointe]'}`),
           '',
           '─── FIN DU TRANSCRIPT ───────────────────────',
         ];
-        const transcriptText=lines.join('\n');
-        const tmpPath=path.join(__dirname,`transcript_${ticketId}_${Date.now()}.txt`);
-        fs.writeFileSync(tmpPath,transcriptText,'utf8');
+        const txtPath=path.join(__dirname,`transcript_${ticketId}_${Date.now()}.txt`);
+        fs.writeFileSync(txtPath,lines.join('\n'),'utf8');
+
+        const transcriptEmbed = new EmbedBuilder().setColor(C.info)
+          .setAuthor({name:`🎫 Transcript — Ticket #${String(ticketId).padStart(4,'0')}`})
+          .addFields(
+            {name:'📋 Catégorie',value:ticket.category,inline:true},
+            {name:'🏠 Serveur',value:guild.name,inline:true},
+            {name:'🔒 Fermé par',value:`${user.username}`,inline:true},
+            {name:'📅 Date',value:`<t:${Math.floor(Date.now()/1000)}:f>`,inline:true},
+          )
+          .setDescription('> Ton transcript est joint ci-dessous (HTML dark theme + backup .txt).')
+          .setFooter({text:'Wenzy Bot v9.0 • Tickets'})
+          .setTimestamp();
+
+        // DM créateur
         try{
           const creator=await interaction.client.users.fetch(ticket.creator_id).catch(()=>null);
-          if(creator){
+          if(creator && creator.id !== user.id){
             await creator.send({
-              embeds:[new EmbedBuilder().setColor(C.info)
-                .setAuthor({name:`🎫 Transcript — Ticket #${String(ticketId).padStart(4,'0')}`})
-                .addFields(
-                  {name:'📋 Catégorie',value:ticket.category,inline:true},
-                  {name:'🏠 Serveur',value:guild.name,inline:true},
-                  {name:'🔒 Fermé par',value:`${user.username}`,inline:true},
-                  {name:'📅 Date',value:`<t:${Math.floor(Date.now()/1000)}:f>`,inline:true},
-                )
-                .setDescription('> Le transcript de ton ticket est joint ci-dessous en fichier `.txt`.')
-                .setFooter({text:'Wenzy Bot v7.5 • Tickets'})
-                .setTimestamp()],
-              files:[{attachment:tmpPath,name:`transcript-ticket-${ticketId}.txt`}],
-            });
+              embeds:[transcriptEmbed],
+              files:[
+                {attachment:htmlPath,name:`transcript-ticket-${ticketId}.html`},
+                {attachment:txtPath,name:`transcript-ticket-${ticketId}.txt`},
+              ],
+            }).catch(()=>{});
           }
         }catch{}
-        // cleanup tmp file after 5s
-        setTimeout(()=>fs.unlink(tmpPath,()=>{}),5000);
+
+        // DM à la personne qui ferme (si différente du créateur)
+        try{
+          const closer = await interaction.client.users.fetch(user.id).catch(()=>null);
+          if(closer){
+            await closer.send({
+              embeds:[transcriptEmbed],
+              files:[
+                {attachment:htmlPath,name:`transcript-ticket-${ticketId}.html`},
+                {attachment:txtPath,name:`transcript-ticket-${ticketId}.txt`},
+              ],
+            }).catch(()=>{});
+          }
+        }catch{}
+
+        setTimeout(()=>{ fs.unlink(htmlPath,()=>{}); fs.unlink(txtPath,()=>{}); },15000);
       }catch(e){console.error('[Transcript]',e.message);}
 
       await tCh.send({embeds:[new EmbedBuilder().setColor(C.danger).setDescription(`🔒 **Ticket fermé par <@${user.id}>**\nSuppression dans 10 secondes.`).setTimestamp()]});
       await sendLog(guild,new EmbedBuilder().setColor(C.info).setAuthor({name:`🔒 Ticket #${ticketId} fermé`}).addFields({name:'👤 Par',value:`<@${user.id}>`,inline:true},{name:'📋 Catégorie',value:ticket.category,inline:true}).setTimestamp());
       setTimeout(()=>tCh.delete('Ticket fermé').catch(()=>{}),10000);
     }
-    return interaction.editReply('✅ Ticket fermé. Transcript envoyé en DM au créateur.');
+    return interaction.editReply('✅ Ticket fermé. Transcript HTML + TXT envoyés en DM.');
   }
 
   if (customId.startsWith('gw_join_')) {
@@ -3740,6 +4500,36 @@ async function handleButton(interaction) {
     db.prepare('UPDATE duels SET status=? WHERE id=?').run('cancelled',duelId);
     await interaction.editReply({embeds:[new EmbedBuilder().setColor(C.danger).setDescription(`❌ **<@${user.id}> a refusé le duel.**`)],components:[]});
   }
+
+  // ── RATING BUTTONS (post-trade) ───────────────────────────────
+  if (customId.startsWith('rate_')) {
+    await interaction.deferReply({ ephemeral:true });
+    const parts = customId.split('_'); // rate_5_tradeId_targetId
+    const stars = parseInt(parts[1]);
+    const tradeId = parseInt(parts[2]);
+    const targetId = parts[3];
+    if (isNaN(stars) || isNaN(tradeId) || !targetId) return interaction.editReply('❌ Données invalides.');
+    // Check already rated
+    const alreadyRated = db.prepare('SELECT 1 FROM trade_ratings WHERE from_id=? AND trade_id=?').get(user.id, tradeId);
+    if (alreadyRated) return interaction.editReply('❌ Tu as déjà noté ce trade.');
+    db.prepare('INSERT INTO trade_ratings (from_id,to_id,trade_id,rating) VALUES (?,?,?,?)').run(user.id, targetId, tradeId, stars);
+    // Update vouch with rating
+    const avg = db.prepare('SELECT AVG(rating) as avg, COUNT(*) as cnt FROM trade_ratings WHERE to_id=?').get(targetId);
+    // Notify target
+    try{
+      const target = await interaction.client.users.fetch(targetId).catch(()=>null);
+      if(target){
+        await target.send({
+          embeds:[new EmbedBuilder().setColor(stars>=4?C.success:stars>=3?C.warning:C.danger)
+            .setAuthor({name:`⭐ Note reçue — Trade #${String(tradeId).padStart(4,'0')}`})
+            .setDescription(`<@${user.id}> t'a noté **${stars}/5 ⭐** pour le trade **#${tradeId}**.\n\n> Moyenne totale : **${avg.avg?.toFixed(1)??stars}/5** (${avg.cnt} avis)`)
+            .setFooter({text:'Wenzy Bot v9.0 • Système de notes'})
+            .setTimestamp()],
+        }).catch(()=>{});
+      }
+    }catch{}
+    return interaction.editReply(`✅ Note **${stars}⭐** envoyée à <@${targetId}> !`);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -3748,14 +4538,22 @@ async function handleButton(interaction) {
 async function handleSelectMenu(interaction) {
   if (interaction.customId === 'ticket_select_category') {
     const category = interaction.values[0];
-    // Capitalize first letter
     const categoryLabel = category.charAt(0).toUpperCase() + category.slice(1);
-    
+
+    if (categoryLabel.toLowerCase() === 'candidature') {
+      // Show full application modal — 15 questions
+      const modal = new ModalBuilder().setCustomId('modal_candidature').setTitle('📋 Candidature Staff — Wenzy MM2');
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('cand_age').setLabel('Quel est ton âge ?').setStyle(TextInputStyle.Short).setPlaceholder('Ex: 17').setRequired(true).setMinLength(1).setMaxLength(3)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('cand_prenom').setLabel('Prénom & pseudo Discord').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Maxime / MaxGaming').setRequired(true)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('cand_experience').setLabel('Expérience en modération / staff ?').setStyle(TextInputStyle.Paragraph).setPlaceholder('Décris tous tes rôles staff passés, les serveurs, durée, responsabilités...').setRequired(true).setMinLength(80)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('cand_pourquoi').setLabel('Pourquoi veux-tu rejoindre l\'équipe ?').setStyle(TextInputStyle.Paragraph).setPlaceholder('Explique ta motivation, ce que tu apporterais, pourquoi ce serveur en particulier...').setRequired(true).setMinLength(80)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('cand_dispo').setLabel('Disponibilités + fuseau horaire ?').setStyle(TextInputStyle.Paragraph).setPlaceholder('Jours de la semaine, créneaux horaires, vacances à venir, fuseau...').setRequired(true).setMinLength(30)),
+      );
+      return interaction.showModal(modal);
+    }
+
     await interaction.deferReply({ ephemeral:true });
-    
-    // Modal pour la raison du ticket
-    // On crée directement le ticket avec une raison vide, le modal serait mieux
-    // mais on peut pas faire modal après deferReply, donc on crée directement
     const ch = await createTicket(interaction, categoryLabel, {});
     if (ch) return interaction.editReply(`✅ Ticket **${categoryLabel}** créé : <#${ch.id}>`);
   }
@@ -3805,6 +4603,60 @@ async function handleModal(interaction) {
       db.prepare('INSERT INTO shop_purchases (discord_id,item_type,item_data,coins_spent) VALUES (?,?,?,?)').run(interaction.user.id,'custom_role',JSON.stringify({name:roleName,color:colorInput}),500);
       await interaction.editReply(`✅ Rôle **${roleName}** créé et attribué !`);
     }catch(e){await interaction.editReply(`❌ Erreur : ${e.message}`);}
+  }
+
+  // ── CANDIDATURE MODAL (suite après 5 premières questions) ────
+  if (customId === 'modal_candidature') {
+    await interaction.deferReply({ ephemeral:true });
+    const age = interaction.fields.getTextInputValue('cand_age');
+    const prenom = interaction.fields.getTextInputValue('cand_prenom');
+    const experience = interaction.fields.getTextInputValue('cand_experience');
+    const pourquoi = interaction.fields.getTextInputValue('cand_pourquoi');
+    const dispo = interaction.fields.getTextInputValue('cand_dispo');
+
+    // Create the ticket channel
+    const ch = await createTicket(interaction, 'Candidature', { reason: `Candidature de ${interaction.user.username}` });
+    if (!ch) return; // createTicket already replied
+
+    // Send the full application embed in the ticket
+    await ch.send({
+      embeds:[new EmbedBuilder().setColor(C.purple)
+        .setAuthor({name:`📋 Candidature — ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL()})
+        .setThumbnail(interaction.user.displayAvatarURL())
+        .addFields(
+          {name:'🎂 Âge',value:age,inline:true},
+          {name:'👤 Identité',value:prenom,inline:true},
+          {name:'🏅 Expérience staff',value:experience.slice(0,1024),inline:false},
+          {name:'💡 Motivation',value:pourquoi.slice(0,1024),inline:false},
+          {name:'📅 Disponibilités',value:dispo,inline:false},
+        )
+        .setDescription('> Candidature soumise automatiquement via le formulaire.')
+        .setFooter({text:'Wenzy Bot v9.0 • Candidature Staff'})
+        .setTimestamp()
+      ],
+    }).catch(()=>{});
+
+    // Post a follow-up embed asking remaining questions (staff reads)
+    await ch.send({
+      embeds:[new EmbedBuilder().setColor(C.info)
+        .setDescription([
+          '**📝 Questions supplémentaires à répondre dans ce ticket :**',
+          '1. Quelle est ta plus grande qualité en tant que modérateur ?',
+          '2. Comment gérerais-tu un conflit entre deux membres ?',
+          '3. As-tu déjà sanctionné un ami ? Comment tu le vécus ?',
+          '4. Quelle est ta maîtrise de Discord (bots, permissions, audit logs) ?',
+          '5. Comment réagirais-tu à un raid massif sur le serveur ?',
+          '6. Décris en 5 mots ta façon de modérer.',
+          '7. Peux-tu rester calme face à un membre agressif ?',
+          '8. Connais-tu les règles de ce serveur ?',
+          '9. T\'es-tu déjà retrouvé dans une situation difficile sur Discord ? Laquelle ?',
+          '10. Qu\'est-ce qu\'un bon staff selon toi ?',
+        ].join('\n'))
+        .setFooter({text:'Réponds dans ce ticket — le staff lira ta candidature'})
+      ],
+    }).catch(()=>{});
+
+    return interaction.editReply(`✅ Candidature créée : <#${ch.id}> ! Réponds aux questions supplémentaires dans le ticket.`);
   }
 }
 
@@ -3867,6 +4719,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildVoiceStates,GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,GatewayIntentBits.GuildPresences,
+    GatewayIntentBits.GuildModeration,
   ]
 });
 client.commands = new Collection();
@@ -4023,7 +4876,7 @@ client.on(Events.ChannelDelete, ch=>{
 
 // ── CLIENT READY ─────────────────────────────────────────────
 client.once(Events.ClientReady, async()=>{
-  console.log(`✅ Wenzy Bot v8.0 : ${client.user.tag}`);
+  console.log(`✅ Wenzy Bot v9.0 : ${client.user.tag}`);
   client.user.setActivity('MM2 Trades 🗡️ | /panel', { type:3 });
 
   const rest = new REST({ version:'10' }).setToken(process.env.DISCORD_TOKEN);
@@ -4063,7 +4916,7 @@ client.once(Events.ClientReady, async()=>{
     else await endGiveaway(client,gw.id);
   }
   console.log(`[Giveaways] ${activeGiveaways.length} giveaway(s) repris`);
-  console.log('[Wenzy Bot v8.0] Prêt. 6767');
+  console.log('[Wenzy Bot v9.0] Prêt. 6767');
 });
 
 client.login(process.env.DISCORD_TOKEN);
