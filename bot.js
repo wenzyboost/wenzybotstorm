@@ -1074,25 +1074,25 @@ async function fetchMM2Values() {
 // ── XP ROLES SYSTEM ─────────────────────────────────────────
 async function applyXpRoles(guild, member, xp) {
   try {
-    // Apply default XP tiers
+    // ── Tiers par défaut : un seul rôle actif, tous les autres retirés ──
     const currentTier = getXpTier(xp);
     for (const t of XP_TIERS) {
-      const r = guild.roles.cache.find(x => x.name === t.roleSync);
-      if (r) {
-        if (t.name === currentTier.name && !member.roles.cache.has(r.id)) await member.roles.add(r).catch(()=>{});
-        else if (t.name !== currentTier.name && member.roles.cache.has(r.id)) await member.roles.remove(r).catch(()=>{});
-      }
+      const r = guild.roles.cache.find(role => role.name === t.roleSync);
+      if (!r) continue;
+      const shouldHave = t.name === currentTier.name;
+      const hasIt = member.roles.cache.has(r.id);
+      if (shouldHave && !hasIt) await member.roles.add(r).catch(()=>{});
+      else if (!shouldHave && hasIt) await member.roles.remove(r).catch(()=>{});
     }
-    // Apply custom XP roles from /panel config
+    // ── Custom XP roles depuis /panel : on donne si xp >= seuil, retire sinon ──
     const customRoles = getXpRoles(guild.id);
     for (const cr of customRoles) {
       const role = guild.roles.cache.get(cr.role_id);
       if (!role) continue;
-      if (xp >= cr.xp_threshold && !member.roles.cache.has(role.id)) {
-        await member.roles.add(role).catch(()=>{});
-      } else if (xp < cr.xp_threshold && member.roles.cache.has(role.id)) {
-        await member.roles.remove(role).catch(()=>{});
-      }
+      const shouldHave = xp >= cr.xp_threshold;
+      const hasIt = member.roles.cache.has(role.id);
+      if (shouldHave && !hasIt) await member.roles.add(role).catch(()=>{});
+      else if (!shouldHave && hasIt) await member.roles.remove(role).catch(()=>{});
     }
   } catch {}
 }
@@ -1449,10 +1449,33 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
     try{
       const t=await guild.channels.fetch(trade.thread_id).catch(()=>null);
       if(t){
-        await t.send('🎉 **Trade complété !** +50 🪙 | +1 vouch | +50 XP');
+        // ── Message de complétion avec mention des deux membres ──────
+        await t.send({
+          content:`<@${trade.poster_id}> <@${trade.accepter_id}>`,
+          embeds:[new EmbedBuilder().setColor(C.success)
+            .setAuthor({name:`✅ Trade #${String(tradeId).padStart(4,'0')} validé par le staff !`})
+            .setDescription([
+              '🎉 **Le trade a été confirmé et validé.**',
+              '',
+              '**📋 Prochaines étapes :**',
+              '1️⃣ Chacun reçoit un **DM avec les boutons de note** ci-dessous',
+              '2️⃣ **Notez votre partenaire** (obligatoire pour fermer le thread)',
+              '3️⃣ Le thread se ferme automatiquement une fois les **2 notes** reçues',
+              '',
+              '> ⚠️ **Le thread ne se supprime PAS tant que les deux membres n\'ont pas noté.**',
+            ].join('\n'))
+            .addFields(
+              {name:'💰 Gains',value:'**+50 🪙** | **+1 vouch** | **+50 XP** chacun',inline:false},
+              {name:'👤 Poster',value:`<@${trade.poster_id}>`,inline:true},
+              {name:'👤 Accepter',value:`<@${trade.accepter_id}>`,inline:true},
+            )
+            .setFooter({text:'Wenzy Bot v9.0 • Note obligatoire pour fermer'})
+            .setTimestamp()],
+        }).catch(()=>{});
+
+        // ── Envoi DM + note obligatoire, suppression thread quand les 2 ont noté ──
         setTimeout(async()=>{
           try{
-            // Build HTML transcript of the trade thread
             const tMsgs = await t.messages.fetch({limit:100}).catch(()=>null);
             if(tMsgs){
               const fakeTicket = {id:tradeId, category:'Trade', creator_id:trade.poster_id};
@@ -1462,11 +1485,16 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
 
               const tradeEmb = new EmbedBuilder().setColor(C.success)
                 .setAuthor({name:`📦 Trade #${String(tradeId).padStart(4,'0')} — Transcript`})
-                .setDescription('> Le transcript de ton trade est joint. Note ton partenaire avec les boutons ci-dessous !')
-                .setFooter({text:'Wenzy Bot v9.0'})
+                .setDescription([
+                  '> Le transcript de ton trade est joint.',
+                  '',
+                  '**⭐ Note ton partenaire avec les boutons ci-dessous.**',
+                  '> Une fois les **2 notes** envoyées, le thread sera automatiquement supprimé.',
+                ].join('\n'))
+                .setFooter({text:'Wenzy Bot v9.0 • Note obligatoire'})
                 .setTimestamp();
 
-              // DM to poster — with rating buttons for accepter
+              // DM poster — boutons pour noter l'accepter
               try{
                 const poster = await guild.client.users.fetch(trade.poster_id).catch(()=>null);
                 if(poster && trade.accepter_id){
@@ -1478,7 +1506,7 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
                 }
               }catch{}
 
-              // DM to accepter — with rating buttons for poster
+              // DM accepter — boutons pour noter le poster
               try{
                 const accepter = await guild.client.users.fetch(trade.accepter_id).catch(()=>null);
                 if(accepter && trade.poster_id){
@@ -1490,11 +1518,37 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
                 }
               }catch{}
 
-              setTimeout(()=>fs.unlink(htmlPath,()=>{}),30000);
+              setTimeout(()=>fs.unlink(htmlPath,()=>{}),60000);
             }
-            await t.setArchived(true,'Trade terminé');
+
+            // ── Watcher : supprime le thread quand les 2 notes sont soumises ──
+            // On poll toutes les 30s, max 10min (20 tentatives)
+            let attempts = 0;
+            const checkRatings = setInterval(async()=>{
+              attempts++;
+              const rCount = db.prepare(
+                'SELECT COUNT(*) as c FROM trade_ratings WHERE trade_id=? AND (from_id=? OR from_id=?)'
+              ).get(tradeId, trade.poster_id, trade.accepter_id)?.c ?? 0;
+
+              if(rCount >= 2 || attempts >= 20){
+                clearInterval(checkRatings);
+                try{
+                  if(rCount < 2){
+                    // Rappel si timeout sans noter
+                    await t.send({
+                      content:`<@${trade.poster_id}> <@${trade.accepter_id}>`,
+                      embeds:[new EmbedBuilder().setColor(C.warning)
+                        .setDescription('⏰ **Délai de note dépassé.** Le thread va être archivé.')
+                        .setTimestamp()],
+                    }).catch(()=>{});
+                  }
+                  await t.setArchived(true,'Trade terminé — notes soumises ou timeout').catch(()=>{});
+                }catch{}
+              }
+            }, 30000);
+
           }catch{}
-        },10000);
+        }, 8000);
       }
     }catch{}
   }
@@ -3688,6 +3742,63 @@ const commands = [
     }
   },
 
+  // ── /updatetrades ──────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName('updatetrades')
+      .setDescription('🔄 (Admin) Supprimer les anciens trades affichés et rafraîchir tous les trades ouverts dans post-trades')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral:true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const guild = interaction.guild;
+      const cfg = getConfig(guild.id);
+
+      // Trouver le salon post-trades
+      const tradeCh = cfg?.trades_channel
+        ? guild.channels.cache.get(cfg.trades_channel)
+        : guild.channels.cache.find(c=>c.name.includes('post-trades'));
+      if (!tradeCh) return interaction.editReply('❌ Salon **post-trades** introuvable. Configure via `/panel`.');
+
+      // Supprimer tous les messages du bot dans le salon (embeds trades)
+      let deleted = 0;
+      try {
+        const fetched = await tradeCh.messages.fetch({limit:100});
+        for (const m of fetched.values()) {
+          if (m.author.bot) { await m.delete().catch(()=>{}); deleted++; await new Promise(r=>setTimeout(r,300)); }
+        }
+      } catch {}
+
+      // Re-poster tous les trades open/in_progress depuis la DB
+      const openTrades = db.prepare('SELECT * FROM trades WHERE status IN (?,?) ORDER BY created_at ASC').all('open','in_progress');
+      let reposted = 0;
+      for (const trade of openTrades) {
+        try {
+          const poster = db.prepare('SELECT * FROM users WHERE discord_id=?').get(trade.poster_id);
+          const embed = trade.status === 'in_progress'
+            ? new EmbedBuilder().setColor(C.warning)
+                .setAuthor({name:`⏳ TRADE #${String(trade.id).padStart(4,'0')} — EN COURS`})
+                .setDescription(`> <@${trade.poster_id}> × <@${trade.accepter_id}>\n> Lancé <t:${trade.created_at}:R>`)
+                .setTimestamp()
+            : tradeEmbed(trade, poster);
+          const components = trade.status === 'open' ? [tradeButtons(trade.id)] : [];
+          const msg = await tradeCh.send({embeds:[embed], components}).catch(()=>null);
+          if (msg) {
+            db.prepare('UPDATE trades SET message_id=?,channel_id=? WHERE id=?').run(msg.id, tradeCh.id, trade.id);
+            reposted++;
+          }
+          await new Promise(r=>setTimeout(r,400));
+        } catch {}
+      }
+
+      await interaction.editReply([
+        `✅ **Trades mis à jour dans <#${tradeCh.id}>**`,
+        `🗑️ Messages supprimés : **${deleted}**`,
+        `📬 Trades re-postés : **${reposted}** (open + in_progress)`,
+      ].join('\n'));
+    }
+  },
+
   // ── /avis ──────────────────────────────────────────────────
   {
     data: new SlashCommandBuilder().setName('avis').setDescription('⭐ Voir tous les avis d\'un membre').addUserOption(o=>o.setName('membre').setDescription('Membre').setRequired(false)),
@@ -4005,6 +4116,51 @@ const commands = [
           {name:'💰 Nouveau solde',value:`${newCoins.toLocaleString('fr-FR')} 🪙`,inline:true},
           ...(!won?[{name:'🏆 Pool actuel',value:`${pool.toLocaleString('fr-FR')} 🪙`,inline:true}]:[]),
         ).setFooter({text:'Wenzy Casino v9.0 • 1% de chances de tout gagner !'}).setTimestamp()]});
+    }
+  },
+
+  // ── /sync-xp-roles ────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName('sync-xp-roles')
+      .setDescription('🔄 (Admin) Recalculer et corriger les rôles XP de tous les membres sans toucher au reste')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral: true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const guild = interaction.guild;
+
+      await interaction.editReply('⏳ Synchronisation des rôles XP en cours... (peut prendre quelques secondes)');
+
+      await guild.members.fetch().catch(()=>{});
+      const allUsers = db.prepare('SELECT discord_id, xp, trade_count FROM users').all();
+
+      let synced = 0, errors = 0;
+      for (const u of allUsers) {
+        try {
+          const member = guild.members.cache.get(u.discord_id);
+          if (!member || member.user.bot) continue;
+          await applyXpRoles(guild, member, u.xp ?? 0);
+          await applyTradeRankRole(guild, member, u.trade_count ?? 0);
+          synced++;
+          // Rate-limit safety : pause tous les 10 membres
+          if (synced % 10 === 0) await new Promise(r => setTimeout(r, 1000));
+        } catch { errors++; }
+      }
+
+      await sendLog(guild, new EmbedBuilder().setColor(C.success)
+        .setAuthor({ name: '🔄 Sync XP Roles' })
+        .addFields(
+          { name: '✅ Membres synchronisés', value: `${synced}`, inline: true },
+          { name: '❌ Erreurs', value: `${errors}`, inline: true },
+          { name: '🛡️ Par', value: `<@${interaction.user.id}>`, inline: true },
+        ).setTimestamp());
+
+      await interaction.editReply([
+        `✅ **Rôles XP recalculés sur ${synced} membre(s)**`,
+        `> Chaque membre a maintenant le bon rôle XP selon son XP actuel en DB.`,
+        ...(errors ? [`⚠️ ${errors} erreur(s) ignorées.`] : []),
+      ].join('\n'));
     }
   },
 
@@ -4528,6 +4684,30 @@ async function handleButton(interaction) {
         }).catch(()=>{});
       }
     }catch{}
+
+    // ── Vérifier si les 2 membres ont noté → archiver le thread ──
+    try{
+      const trade = db.prepare('SELECT * FROM trades WHERE id=?').get(tradeId);
+      if(trade?.thread_id && trade.poster_id && trade.accepter_id){
+        const rCount = db.prepare(
+          'SELECT COUNT(*) as c FROM trade_ratings WHERE trade_id=? AND (from_id=? OR from_id=?)'
+        ).get(tradeId, trade.poster_id, trade.accepter_id)?.c ?? 0;
+
+        if(rCount >= 2){
+          const thread = await interaction.guild?.channels.fetch(trade.thread_id).catch(()=>null);
+          if(thread){
+            await thread.send({
+              content:`<@${trade.poster_id}> <@${trade.accepter_id}>`,
+              embeds:[new EmbedBuilder().setColor(C.success)
+                .setDescription('✅ **Les deux notes ont été soumises.** Ce thread va être archivé dans 10 secondes.')
+                .setTimestamp()],
+            }).catch(()=>{});
+            setTimeout(()=>thread.setArchived(true,'Notes soumises — thread fermé automatiquement').catch(()=>{}), 10000);
+          }
+        }
+      }
+    }catch{}
+
     return interaction.editReply(`✅ Note **${stars}⭐** envoyée à <@${targetId}> !`);
   }
 }
@@ -4684,29 +4864,81 @@ function startYoutubeWatcher(client) {
 }
 
 // ── STATUS WATCHER (pour le rôle .gg/wenzy) ─────────────────
+function hasWenzyStatus(member) {
+  return member.presence?.activities?.some(a =>
+    a.state?.toLowerCase().includes('.gg/wenzy') ||
+    a.name?.toLowerCase().includes('.gg/wenzy') ||
+    a.details?.toLowerCase().includes('.gg/wenzy')
+  ) ?? false;
+}
+
+async function applyStatusRole(guild, member) {
+  try {
+    const cfg = getConfig(guild.id);
+    if (!cfg?.status_role) return;
+    const statusRole = guild.roles.cache.get(cfg.status_role);
+    if (!statusRole) return;
+    if (member.user.bot) return;
+    const hasStatus = hasWenzyStatus(member);
+    const hasRole = member.roles.cache.has(statusRole.id);
+    if (hasStatus && !hasRole) await member.roles.add(statusRole).catch(()=>{});
+    else if (!hasStatus && hasRole) await member.roles.remove(statusRole).catch(()=>{});
+  } catch {}
+}
+
 function startStatusWatcher(client) {
-  // Vérifie toutes les 5 minutes les statuts des membres
-  cron.schedule('*/5 * * * *', async()=>{
-    for(const[,guild] of client.guilds.cache){
+  // ── Event PresenceUpdate — INSTANTANÉ ────────────────────
+  // Déclenché dès que quelqu'un ajoute/retire/modifie son status Discord
+  client.on(Events.PresenceUpdate, async (oldPresence, newPresence) => {
+    try {
+      const guild = newPresence?.guild ?? oldPresence?.guild;
+      if (!guild) return;
+      const userId = newPresence?.userId ?? oldPresence?.userId;
+      if (!userId) return;
+
+      const cfg = getConfig(guild.id);
+      if (!cfg?.status_role) return;
+      const statusRole = guild.roles.cache.get(cfg.status_role);
+      if (!statusRole) return;
+
+      // On prend la présence directement depuis newPresence (déjà fraîche)
+      // et on fetch le membre pour avoir ses rôles à jour
+      const member = await guild.members.fetch(userId).catch(()=>null);
+      if (!member || member.user.bot) return;
+
+      // Lire les activités depuis newPresence directement (pas member.presence qui peut être stale)
+      const activities = newPresence?.activities ?? [];
+      const hasStatus = activities.some(a =>
+        a.state?.toLowerCase().includes('.gg/wenzy') ||
+        a.name?.toLowerCase().includes('.gg/wenzy') ||
+        a.details?.toLowerCase().includes('.gg/wenzy')
+      );
+
+      const hasRole = member.roles.cache.has(statusRole.id);
+      if (hasStatus && !hasRole) {
+        await member.roles.add(statusRole).catch(()=>{});
+      } else if (!hasStatus && hasRole) {
+        await member.roles.remove(statusRole).catch(()=>{});
+      }
+    } catch {}
+  });
+
+  // ── Cron de rattrapage toutes les 5 min (membres qui étaient offline) ──
+  cron.schedule('*/5 * * * *', async () => {
+    for (const [, guild] of client.guilds.cache) {
       const cfg = getConfig(guild.id);
       if (!cfg?.status_role) continue;
       const statusRole = guild.roles.cache.get(cfg.status_role);
       if (!statusRole) continue;
-      try{
-        const members = await guild.members.fetch();
-        for(const[,member] of members){
+      try {
+        const members = await guild.members.fetch({ withPresences: true }).catch(()=>null);
+        if (!members) continue;
+        for (const [, member] of members) {
           if (member.user.bot) continue;
-          const hasStatus = member.presence?.activities?.some(a=>
-            a.state?.toLowerCase().includes('.gg/wenzy') ||
-            a.name?.toLowerCase().includes('.gg/wenzy')
-          );
-          if (hasStatus && !member.roles.cache.has(statusRole.id)) {
-            await member.roles.add(statusRole).catch(()=>{});
-          } else if (!hasStatus && member.roles.cache.has(statusRole.id)) {
-            await member.roles.remove(statusRole).catch(()=>{}); // Retire quand le status est enlevé
-          }
+          await applyStatusRole(guild, member);
+          await new Promise(r => setTimeout(r, 50));
         }
-      }catch{}
+      } catch {}
     }
   });
 }
