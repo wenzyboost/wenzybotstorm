@@ -54,236 +54,209 @@ try {
 async function buildLevelUpImage(discordUser, oldTier, newTier, xp) {
   if (!createCanvas) return null;
   try {
-    const W = 900, H = 320;
+    const W = 800, H = 280;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext('2d');
     const tierHex = `#${newTier.color.toString(16).padStart(6,'0')}`;
-    const oldHex  = `#${oldTier.color.toString(16).padStart(6,'0')}`;
 
-    // ── FOND ULTRA DARK avec dégradé diagonal ────────────────
+    // ── FOND ULTRA DARK ──────────────────────────────────────
     const bgGrad = ctx.createLinearGradient(0, 0, W, H);
-    bgGrad.addColorStop(0,   '#050510');
-    bgGrad.addColorStop(0.4, '#0a0a1a');
-    bgGrad.addColorStop(1,   '#080820');
+    bgGrad.addColorStop(0, '#0d0d1a');
+    bgGrad.addColorStop(0.5, '#111122');
+    bgGrad.addColorStop(1, '#0a0a16');
     ctx.fillStyle = bgGrad;
-    ctx.roundRect(0, 0, W, H, 28);
+    ctx.roundRect(0, 0, W, H, 24);
     ctx.fill();
 
-    // ── GRANDE ZONE COLORÉE DERRIÈRE AVATAR ─────────────────
-    const glowX = 148, glowY = 155;
-    const glow0 = ctx.createRadialGradient(glowX, glowY, 0, glowX, glowY, 220);
-    glow0.addColorStop(0, `${tierHex}60`);
-    glow0.addColorStop(0.5, `${tierHex}22`);
-    glow0.addColorStop(1, 'transparent');
-    ctx.fillStyle = glow0;
+    // ── GLOW RADIAL DERRIÈRE L'AVATAR ───────────────────────
+    const glowX = 130, glowY = 130;
+    const glow = ctx.createRadialGradient(glowX, glowY, 10, glowX, glowY, 180);
+    glow.addColorStop(0, `${tierHex}55`);
+    glow.addColorStop(0.5, `${tierHex}18`);
+    glow.addColorStop(1, 'transparent');
+    ctx.fillStyle = glow;
     ctx.fillRect(0, 0, W, H);
 
-    // ── GLOW CÔTÉ DROIT ──────────────────────────────────────
-    const glowR = ctx.createRadialGradient(W - 80, H / 2, 0, W - 80, H / 2, 280);
-    glowR.addColorStop(0, `${tierHex}30`);
-    glowR.addColorStop(1, 'transparent');
-    ctx.fillStyle = glowR;
+    // ── GLOW CÔTÉ DROIT (ambiance) ───────────────────────────
+    const glow2 = ctx.createRadialGradient(W, 0, 20, W, 0, 300);
+    glow2.addColorStop(0, `${tierHex}22`);
+    glow2.addColorStop(1, 'transparent');
+    ctx.fillStyle = glow2;
     ctx.fillRect(0, 0, W, H);
 
-    // ── BARRE HORIZONTALE TOP colorée (effet "bannière") ─────
-    const bannerGrad = ctx.createLinearGradient(0, 0, W, 0);
-    bannerGrad.addColorStop(0, `${tierHex}00`);
-    bannerGrad.addColorStop(0.15, `${tierHex}bb`);
-    bannerGrad.addColorStop(0.85, `${tierHex}bb`);
-    bannerGrad.addColorStop(1, `${tierHex}00`);
-    ctx.fillStyle = bannerGrad;
-    ctx.fillRect(0, 0, W, 5);
-
-    // ── BARRE HORIZONTALE BOTTOM ──────────────────────────────
-    ctx.fillStyle = bannerGrad;
-    ctx.fillRect(0, H - 5, W, 5);
-
-    // ── PARTICULES ÉTOILES ÉPARPILLÉES ───────────────────────
-    const stars = [
-      {x:480,y:22,r:3.5},{x:600,y:40,r:2},{x:720,y:18,r:3},
-      {x:555,y:65,r:1.5},{x:810,y:35,r:2.5},{x:650,y:85,r:1.5},
-      {x:760,y:70,r:2},{x:840,y:90,r:1},{x:490,y:50,r:1.5},
-      {x:870,y:55,r:2.5},{x:530,y:95,r:3},{x:690,y:50,r:1},
-      {x:580,y:30,r:1.5},{x:745,y:100,r:2},{x:820,y:120,r:1.5},
+    // ── PARTICULES DÉCO ──────────────────────────────────────
+    const particles = [
+      {x:460,y:30,r:3},{x:620,y:55,r:2},{x:530,y:80,r:1.5},
+      {x:700,y:30,r:2.5},{x:750,y:70,r:1},{x:490,y:20,r:1.5},
+      {x:670,y:90,r:3},{x:580,y:45,r:2},{x:720,y:120,r:1.5},
+      {x:440,y:60,r:1},{x:760,y:20,r:2},{x:510,y:100,r:2.5},
     ];
-    for (const s of stars) {
+    for (const p of particles) {
       ctx.beginPath();
-      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-      ctx.fillStyle = `${tierHex}ee`;
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `${tierHex}cc`;
       ctx.fill();
     }
 
-    // ── BORDURE GLOW ─────────────────────────────────────────
-    for (let i = 3; i > 0; i--) {
-      ctx.strokeStyle = `${tierHex}${(i * 15).toString(16).padStart(2,'0')}`;
-      ctx.lineWidth = i * 2;
-      ctx.roundRect(i, i, W - i * 2, H - i * 2, 28 - i);
-      ctx.stroke();
-    }
-    ctx.strokeStyle = `${tierHex}99`;
+    // ── BORDURE GLOW TIER ────────────────────────────────────
+    ctx.strokeStyle = `${tierHex}66`;
     ctx.lineWidth = 2;
-    ctx.roundRect(1, 1, W - 2, H - 2, 28);
+    ctx.roundRect(1, 1, W - 2, H - 2, 24);
     ctx.stroke();
+
+    // ── BARRE DÉCO TOP ───────────────────────────────────────
+    const topBar = ctx.createLinearGradient(0, 0, W, 0);
+    topBar.addColorStop(0, 'transparent');
+    topBar.addColorStop(0.3, tierHex);
+    topBar.addColorStop(0.7, tierHex);
+    topBar.addColorStop(1, 'transparent');
+    ctx.fillStyle = topBar;
+    ctx.fillRect(0, 0, W, 3);
 
     // ── AVATAR ───────────────────────────────────────────────
     const avatarURL = discordUser.displayAvatarURL({ extension: 'png', size: 256 });
     try {
       const img = await loadImage(avatarURL);
-      // Cercles glow animés autour de l'avatar
-      for (let i = 6; i > 0; i--) {
+      // Outer glow ring
+      for (let i = 5; i > 0; i--) {
         ctx.beginPath();
-        ctx.arc(glowX, glowY, 78 + i * 4, 0, Math.PI * 2);
-        ctx.strokeStyle = `${tierHex}${(i * 12).toString(16).padStart(2,'0')}`;
-        ctx.lineWidth = 2.5;
+        ctx.arc(glowX, glowY, 72 + i * 3, 0, Math.PI * 2);
+        ctx.strokeStyle = `${tierHex}${Math.round(20 + i * 8).toString(16).padStart(2,'0')}`;
+        ctx.lineWidth = 2;
         ctx.stroke();
       }
-      // Avatar clippé
+      // Clip avatar
       ctx.save();
       ctx.beginPath();
-      ctx.arc(glowX, glowY, 76, 0, Math.PI * 2);
+      ctx.arc(glowX, glowY, 70, 0, Math.PI * 2);
       ctx.closePath();
       ctx.clip();
-      ctx.drawImage(img, glowX - 76, glowY - 76, 152, 152);
+      ctx.drawImage(img, glowX - 70, glowY - 70, 140, 140);
       ctx.restore();
-      // Ring net
+      // Sharp ring
       ctx.beginPath();
-      ctx.arc(glowX, glowY, 78, 0, Math.PI * 2);
+      ctx.arc(glowX, glowY, 72, 0, Math.PI * 2);
       ctx.strokeStyle = tierHex;
-      ctx.lineWidth = 5;
-      ctx.stroke();
-      // Petit ring intérieur blanc
-      ctx.beginPath();
-      ctx.arc(glowX, glowY, 73, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 4;
       ctx.stroke();
     } catch {}
 
-    // ── BADGE EMOJI TIER ──────────────────────────────────────
-    const badgeX = glowX + 56, badgeY = glowY + 56;
-    // Fond badge
+    // ── BADGE TIER (coins droit de l'avatar) ─────────────────
+    const badgeX = glowX + 52, badgeY = glowY + 52;
     ctx.beginPath();
-    ctx.arc(badgeX, badgeY, 24, 0, Math.PI * 2);
-    ctx.fillStyle = '#05051a';
+    ctx.arc(badgeX, badgeY, 20, 0, Math.PI * 2);
+    ctx.fillStyle = '#0d0d1a';
     ctx.fill();
     ctx.strokeStyle = tierHex;
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 3;
     ctx.stroke();
-    ctx.font = '20px sans-serif';
+    ctx.font = 'bold 16px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
     ctx.fillText(newTier.emoji, badgeX, badgeY);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
 
-    // ── ZONE TEXTE ───────────────────────────────────────────
-    const TX = 265;
+    // ── TITRE LEVEL UP ───────────────────────────────────────
+    const textX = 240;
 
-    // ── "LEVEL UP" badge pill ─────────────────────────────────
-    const pillW = 130, pillH = 26, pillX = TX, pillY = 28;
-    ctx.fillStyle = `${tierHex}30`;
-    ctx.strokeStyle = `${tierHex}80`;
-    ctx.lineWidth = 1.5;
-    ctx.roundRect(pillX, pillY, pillW, pillH, 13);
-    ctx.fill();
-    ctx.stroke();
+    // Label "LEVEL UP" en petit caps stylé
     ctx.font = 'bold 13px sans-serif';
-    ctx.fillStyle = tierHex;
-    ctx.textAlign = 'center';
-    ctx.fillText('▲  LEVEL  UP', pillX + pillW / 2, pillY + 17);
-    ctx.textAlign = 'left';
+    ctx.fillStyle = `${tierHex}`;
+    ctx.letterSpacing = '4px';
+    ctx.fillText('▲  LEVEL  UP', textX, 55);
+    ctx.letterSpacing = '0px';
 
-    // ── NOM DU TIER en TRÈS grand ─────────────────────────────
-    ctx.font = 'bold 60px sans-serif';
-    const nameGrad = ctx.createLinearGradient(TX, 60, TX + 500, 130);
+    // Nom du tier
+    ctx.font = 'bold 46px sans-serif';
+    const nameGrad = ctx.createLinearGradient(textX, 60, textX + 400, 110);
     nameGrad.addColorStop(0, '#ffffff');
-    nameGrad.addColorStop(0.6, tierHex);
-    nameGrad.addColorStop(1, `${tierHex}99`);
+    nameGrad.addColorStop(1, tierHex);
     ctx.fillStyle = nameGrad;
-    ctx.fillText(newTier.name, TX, 118);
+    ctx.fillText(newTier.name, textX, 108);
 
-    // ── Transition ancien → nouveau tier ─────────────────────
-    ctx.font = '16px sans-serif';
-    ctx.fillStyle = '#44445a';
-    const oldText = `${oldTier.emoji}  ${oldTier.name}`;
-    ctx.fillText(oldText, TX, 148);
-    const oldW = ctx.measureText(oldText).width;
-    // Flèche colorée
-    ctx.fillStyle = `${tierHex}cc`;
-    ctx.font = 'bold 16px sans-serif';
-    ctx.fillText(`  →  ${newTier.emoji}  ${newTier.name}`, TX + oldW, 148);
+    // Ancien tier barré / flèche
+    ctx.font = '15px sans-serif';
+    ctx.fillStyle = '#555577';
+    ctx.fillText(`${oldTier.emoji}  ${oldTier.name}  →  `, textX, 135);
+    const arrowOffset = ctx.measureText(`${oldTier.emoji}  ${oldTier.name}  →  `).width;
+    ctx.fillStyle = tierHex;
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(`${newTier.emoji}  ${newTier.name}`, textX + arrowOffset, 135);
 
-    // ── XP TOTAL ──────────────────────────────────────────────
+    // XP count
     ctx.font = '14px sans-serif';
-    ctx.fillStyle = '#5555aa';
-    ctx.fillText(`✨  ${xp.toLocaleString('fr-FR')} XP total accumulé`, TX, 174);
+    ctx.fillStyle = '#6666aa';
+    ctx.fillText(`✨  ${xp.toLocaleString('fr-FR')} XP total`, textX, 158);
 
-    // ── BARRE DE PROGRESSION ÉPAISSE ──────────────────────────
-    const barX = TX, barY = 194, barW = W - TX - 36, barH = 34, barR = 17;
+    // ── BARRE DE PROGRESSION ─────────────────────────────────
+    const barX = textX, barY = 178, barW = 510, barH = 26, barR = 13;
 
-    // Track fond
-    ctx.fillStyle = '#0e0e22';
+    // Shadow / fond
+    ctx.fillStyle = '#1a1a2e';
     ctx.roundRect(barX, barY, barW, barH, barR);
     ctx.fill();
-    ctx.strokeStyle = `${tierHex}30`;
-    ctx.lineWidth = 1;
-    ctx.roundRect(barX, barY, barW, barH, barR);
-    ctx.stroke();
 
-    // Calcul progression vers prochain tier
-    const nextXpTier = getNextXpTier(xp);
-    const rawPct = nextXpTier ? Math.min(1, (xp - newTier.xp) / (nextXpTier.xp - newTier.xp)) : 1;
-    const fillW = Math.max(barR * 2, (barW - 4) * rawPct);
-    const pctLabel = Math.round(rawPct * 100);
-
-    // Gradient barre remplie
-    const barFill = ctx.createLinearGradient(barX, 0, barX + fillW, 0);
-    barFill.addColorStop(0,   '#3344cc');
-    barFill.addColorStop(0.4, tierHex);
-    barFill.addColorStop(0.8, `${tierHex}dd`);
-    barFill.addColorStop(1,   '#ffffffaa');
-    ctx.fillStyle = barFill;
-    ctx.roundRect(barX + 2, barY + 2, fillW, barH - 4, barR - 1);
+    // Inner dark track
+    ctx.fillStyle = '#0d0d1a';
+    ctx.roundRect(barX + 2, barY + 2, barW - 4, barH - 4, barR - 1);
     ctx.fill();
 
-    // Shine supérieure
+    // Calcul progression
+    const nextTier = getNextXpTier(xp);
+    const pct = nextTier ? Math.min(1, (xp - newTier.xp) / (nextTier.xp - newTier.xp)) : 1;
+    const fillW = Math.max(barR * 2, barW * pct);
+
+    // Gradient barre
+    const barGrad = ctx.createLinearGradient(barX, 0, barX + fillW, 0);
+    barGrad.addColorStop(0, '#5865F2');
+    barGrad.addColorStop(0.5, tierHex);
+    barGrad.addColorStop(1, '#ffffff44');
+    ctx.fillStyle = barGrad;
+    ctx.roundRect(barX + 2, barY + 2, fillW - 4, barH - 4, barR - 1);
+    ctx.fill();
+
+    // Shine sur la barre
     const shine = ctx.createLinearGradient(barX, barY, barX, barY + barH);
-    shine.addColorStop(0, 'rgba(255,255,255,0.22)');
-    shine.addColorStop(0.4, 'rgba(255,255,255,0.08)');
-    shine.addColorStop(1, 'transparent');
+    shine.addColorStop(0, 'rgba(255,255,255,0.18)');
+    shine.addColorStop(0.5, 'transparent');
     ctx.fillStyle = shine;
-    ctx.roundRect(barX + 2, barY + 2, fillW, (barH - 4) / 2, barR - 1);
+    ctx.roundRect(barX + 2, barY + 2, fillW - 4, barH / 2, barR - 1);
     ctx.fill();
 
-    // Texte centré dans la barre
-    ctx.font = 'bold 13px sans-serif';
+    // Texte dans la barre
+    ctx.font = 'bold 12px sans-serif';
     ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    const xpLabel = nextXpTier
-      ? `${pctLabel}%  ·  ${xp.toLocaleString('fr-FR')} / ${nextXpTier.xp.toLocaleString('fr-FR')} XP`
-      : '⭐  NIVEAU MAXIMUM — GOAT MODE';
-    ctx.fillText(xpLabel, barX + barW / 2, barY + 22);
-    ctx.textAlign = 'left';
+    const barLabel = nextTier
+      ? `${Math.round(pct * 100)}%  —  ${xp.toLocaleString('fr-FR')} / ${nextTier.xp.toLocaleString('fr-FR')} XP`
+      : '⭐  NIVEAU MAXIMUM ATTEINT';
+    ctx.fillText(barLabel, barX + 12, barY + 17);
 
-    // Label prochain tier à droite
-    if (nextXpTier) {
+    // Label prochain niveau
+    if (nextTier) {
       ctx.font = '11px sans-serif';
-      ctx.fillStyle = `${tierHex}bb`;
+      ctx.fillStyle = `${tierHex}cc`;
       ctx.textAlign = 'right';
-      ctx.fillText(`Prochain : ${nextXpTier.name} ${nextXpTier.emoji}`, barX + barW, barY - 6);
+      ctx.fillText(`→ ${nextTier.name}`, barX + barW, barY - 5);
       ctx.textAlign = 'left';
     }
 
-    // ── USERNAME + DATE bas droite ────────────────────────────
-    const uname = discordUser.displayName ?? discordUser.username;
-    ctx.font = 'bold 15px sans-serif';
-    ctx.fillStyle = '#6666aa';
-    ctx.textAlign = 'right';
-    ctx.fillText(`@${uname}`, W - 20, H - 24);
-    // Petit "Wenzy Bot" discret
+    // ── FOOTER ───────────────────────────────────────────────
+    const footerY = H - 18;
+    ctx.fillStyle = '#2a2a40';
+    ctx.fillRect(textX, footerY - 1, barW, 1);
+
     ctx.font = '11px sans-serif';
-    ctx.fillStyle = '#222235';
-    ctx.fillText('Wenzy Bot v9.0  •  Système XP', W - 20, H - 10);
+    ctx.fillStyle = '#333355';
+    ctx.fillText('Wenzy Bot v8.0  •  Système XP', textX, footerY + 12);
+
+    // ── USERNAME en haut à droite ─────────────────────────────
+    const uname = discordUser.displayName ?? discordUser.username;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillStyle = '#8888bb';
+    ctx.textAlign = 'right';
+    ctx.fillText(`@${uname}`, W - 24, H - 18);
     ctx.textAlign = 'left';
 
     const buffer = canvas.toBuffer('image/png');
@@ -472,7 +445,12 @@ async function buildProfileImage(discordUser, userData) {
 const REF_SCREEN_PATH = path.join(__dirname, 'ref_screen.jpg');
 
 // ── DATABASE ─────────────────────────────────────────────────
-const db = new Database(path.join(__dirname, 'wenzy.db'));
+// Railway : stocker la DB dans /data (Volume persistant) si dispo, sinon local
+const DB_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'wenzy.db')
+  : path.join(__dirname, 'wenzy.db');
+console.log(`[DB] Chemin : ${DB_PATH}`);
+const db = new Database(DB_PATH);
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     discord_id TEXT PRIMARY KEY, roblox_id TEXT, roblox_username TEXT,
@@ -650,6 +628,24 @@ db.exec(`
   );
 `);
 
+// Table cross-trades
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cross_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    poster_id TEXT NOT NULL,
+    accepter_id TEXT,
+    offer_game TEXT NOT NULL,
+    offer_items TEXT NOT NULL,
+    want_game TEXT NOT NULL,
+    want_items TEXT NOT NULL,
+    status TEXT DEFAULT 'open',
+    thread_id TEXT, message_id TEXT, channel_id TEXT,
+    middleman_id TEXT, screenshot_url TEXT,
+    created_at INTEGER DEFAULT (strftime('%s','now')),
+    completed_at INTEGER
+  );
+`);
+
 const safeMigrations = [
   'ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0',
   'ALTER TABLE users ADD COLUMN vocal_minutes INTEGER DEFAULT 0',
@@ -774,12 +770,12 @@ const C = {
 
 // ── XP SYSTEM ────────────────────────────────────────────────
 const XP_TIERS = [
-  { xp:      5000, name: '5 - Débutants',    color: 0x95A5A6, emoji: '🌱', roleSync: '5 - Débutants' },
-  { xp:   10000, name: '10 - Bavards',     color: 0x2ECC71, emoji: '💬', roleSync: '10 - Bavards' },
-  { xp:  15000, name: '15 - Pipelettes',  color: 0x27AE60, emoji: '🗣️', roleSync: '15 - Pipelettes' },
-  { xp:  20000, name: '20 - Puants',      color: 0x3498DB, emoji: '💨', roleSync: '20 - Puants' },
-  { xp:  30000, name: '30 - Elites',      color: 0x9B59B6, emoji: '⭐', roleSync: '30 - Elites' },
-  { xp:  50000, name: '50 - Goat',        color: 0xF1C40F, emoji: '🐐', roleSync: '50 - Goat' },
+  { xp:      0, name: '5 - Débutants',    color: 0x95A5A6, emoji: '🌱', roleSync: '5 - Débutants' },
+  { xp:   5000, name: '10 - Bavards',     color: 0x2ECC71, emoji: '💬', roleSync: '10 - Bavards' },
+  { xp:  10000, name: '15 - Pipelettes',  color: 0x27AE60, emoji: '🗣️', roleSync: '15 - Pipelettes' },
+  { xp:  15000, name: '20 - Puants',      color: 0x3498DB, emoji: '💨', roleSync: '20 - Puants' },
+  { xp:  20000, name: '30 - Elites',      color: 0x9B59B6, emoji: '⭐', roleSync: '30 - Elites' },
+  { xp:  30000, name: '50 - Goat',        color: 0xF1C40F, emoji: '🐐', roleSync: '50 - Goat' },
 ];
 
 function getXpTier(xp) {
@@ -3026,7 +3022,7 @@ const commands = [
       const did = target.id;
       db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
       const userData = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
-      const xp = safeUserData?.xp ?? 0;
+      const xp = userData?.xp ?? 0;
       const currentTier = getXpTier(xp);
       const nextTier = getNextXpTier(xp);
       const bar = xpProgressBar(xp, 20);
@@ -3035,9 +3031,8 @@ const commands = [
       // Canvas image — carte de stats complète
       let files = [];
       let imgBuffer = null;
-      const safeUserData = userData ?? { xp:0, coins:0, trade_count:0, vouch_count:0, daily_streak:0 };
       try {
-        imgBuffer = await buildProfileImage(target, safeUserData);
+        imgBuffer = await buildProfileImage(target, userData);
         if (imgBuffer) files = [{ attachment: imgBuffer, name: 'level.png' }];
       } catch {}
 
@@ -3076,11 +3071,11 @@ const commands = [
           .addFields(
             { name: `${currentTier.emoji} Niveau`, value: `**${currentTier.name}**`, inline: true },
             { name: '✨ XP', value: `**${xp.toLocaleString('fr-FR')}**`, inline: true },
-            { name: '🔥 Streak', value: `**${safeUserData?.daily_streak ?? 0}j**`, inline: true },
+            { name: '🔥 Streak', value: `**${userData?.daily_streak ?? 0}j**`, inline: true },
             { name: '📊 Progression', value: `\`[${bar}] ${pct}%\`\n${nextTier ? `→ **${nextTier.name}** à ${nextTier.xp} XP` : '🏆 MAX'}${customRolesLine}`, inline: false },
-            { name: '🗡️ Trades', value: `**${safeUserData?.trade_count ?? 0}**`, inline: true },
-            { name: '💬 Vouches', value: `**${safeUserData?.vouch_count ?? 0}**`, inline: true },
-            { name: '🪙 Pièces', value: `**${(safeUserData?.coins ?? 0).toLocaleString('fr-FR')}**`, inline: true },
+            { name: '🗡️ Trades', value: `**${userData?.trade_count ?? 0}**`, inline: true },
+            { name: '💬 Vouches', value: `**${userData?.vouch_count ?? 0}**`, inline: true },
+            { name: '🪙 Pièces', value: `**${(userData?.coins ?? 0).toLocaleString('fr-FR')}**`, inline: true },
           );
       }
 
@@ -3217,19 +3212,10 @@ const commands = [
     async execute(interaction) {
       await interaction.deferReply();
       const target = interaction.options.getUser('membre')??interaction.user;
-      // Crée la row si elle n'existe pas encore (membre jamais actif)
-      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(target.id);
       const user = db.prepare('SELECT * FROM users WHERE discord_id=?').get(target.id);
+      if (!user) return interaction.editReply(`❌ <@${target.id}> n'a pas encore de profil.`);
       const inv = db.prepare('SELECT * FROM inventory WHERE discord_id=?').all(target.id);
-      // Essaie d'envoyer l'image canvas profil
-      let files = [];
-      try {
-        const imgBuffer = await buildProfileImage(target, user);
-        if (imgBuffer) files = [{ attachment: imgBuffer, name: 'profil.png' }];
-      } catch {}
-      const embed = new EmbedBuilder(profileEmbed(user, inv, target).data);
-      if (files.length) embed.setImage('attachment://profil.png');
-      await interaction.editReply({ embeds: [embed], files });
+      await interaction.editReply({embeds:[profileEmbed(user,inv,target)]});
     }
   },
 
@@ -4237,6 +4223,129 @@ const commands = [
     }
   },
 
+  // ── /cross-trade ───────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName('cross-trade')
+      .setDescription('🔀 Poster un cross-trade (échange entre 2 jeux différents)')
+      .addStringOption(o => o.setName('jeu-offre').setDescription('Jeu que tu offres (ex: MM2, Blox Fruits, Adopt Me...)').setRequired(true))
+      .addStringOption(o => o.setName('offre').setDescription('Ce que tu offres').setRequired(true))
+      .addStringOption(o => o.setName('jeu-cherche').setDescription('Jeu que tu cherches (ex: MM2, Blox Fruits, Adopt Me...)').setRequired(true))
+      .addStringOption(o => o.setName('cherche').setDescription('Ce que tu cherches').setRequired(true)),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral: true });
+      const did = interaction.user.id;
+      if (isBlacklisted(did)) return interaction.editReply('❌ Tu es blacklisté.');
+
+      const user = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
+      if (!user?.verified) return interaction.editReply('❌ Lie ton compte Roblox avec `/lier-roblox` avant de cross-trader.');
+
+      const offerGame  = interaction.options.getString('jeu-offre').trim();
+      const offerItems = interaction.options.getString('offre').trim();
+      const wantGame   = interaction.options.getString('jeu-cherche').trim();
+      const wantItems  = interaction.options.getString('cherche').trim();
+
+      const cfg = getConfig(interaction.guild.id);
+      // Cherche un salon cross-trade-panel ou cross-trades
+      const crossCh = interaction.guild.channels.cache.find(c =>
+        c.name.includes('cross-trade') || c.name.includes('crosstrade')
+      );
+      if (!crossCh) return interaction.editReply('❌ Salon cross-trade introuvable. Crée un salon nommé **cross-trade-panel**.');
+
+      const tradeRank = getTradeRank(user.trade_count ?? 0);
+
+      const embed = new EmbedBuilder()
+        .setColor(0x9B59B6)
+        .setAuthor({ name: `🔀 CROSS TRADE #CT${Date.now().toString().slice(-4)} — ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
+        .addFields(
+          { name: `📤 Offre — ${offerGame}`, value: `\`\`\`${offerItems}\`\`\``, inline: true },
+          { name: `📥 Cherche — ${wantGame}`, value: `\`\`\`${wantItems}\`\`\``, inline: true },
+          { name: '👤 Trader', value: `<@${did}>\n${tradeRank.emoji} ${tradeRank.name}\n📊 ${user.trade_count ?? 0} trades · 💬 ${user.vouch_count ?? 0} vouches`, inline: false },
+        )
+        .setFooter({ text: 'Wenzy Bot • Cross Trade' })
+        .setTimestamp();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('ct_accept').setLabel('✅ Accepter').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('ct_mm').setLabel('🛡️ Middleman requis').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('ct_cancel').setLabel('❌ Annuler').setStyle(ButtonStyle.Danger),
+      );
+
+      const msg = await crossCh.send({ embeds: [embed], components: [row] });
+
+      // Sauvegarder en DB
+      const info = db.prepare(`
+        INSERT INTO cross_trades (poster_id, offer_game, offer_items, want_game, want_items, message_id, channel_id)
+        VALUES (?,?,?,?,?,?,?)
+      `).run(did, offerGame, offerItems, wantGame, wantItems, msg.id, crossCh.id);
+
+      // Mettre l'ID dans l'embed
+      await msg.edit({ embeds: [embed.setTitle(`🔀 Cross Trade #CT${info.lastInsertRowid}`)] }).catch(() => {});
+
+      await interaction.editReply(`✅ Cross trade **#CT${info.lastInsertRowid}** posté dans <#${crossCh.id}> !`);
+    }
+  },
+
+  // ── /panel cross-trade (setup salon) ───────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName('setup-cross-trade')
+      .setDescription('⚙️ (Admin) Créer le salon cross-trade-panel')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral: true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const guild = interaction.guild;
+
+      // Chercher ou créer la catégorie MM2
+      let cat = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase().includes('mm2'));
+      if (!cat) cat = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory);
+
+      // Vérifier si le salon existe déjà
+      const existing = guild.channels.cache.find(c => c.name.includes('cross-trade'));
+      if (existing) return interaction.editReply(`✅ Salon cross-trade déjà existant : <#${existing.id}>`);
+
+      const ch = await guild.channels.create({
+        name: '🔀┃cross-trade-panel',
+        type: ChannelType.GuildText,
+        parent: cat ?? null,
+        permissionOverwrites: [
+          { id: guild.id, allow: ['ViewChannel', 'ReadMessageHistory'], deny: ['SendMessages'] },
+        ],
+        topic: 'Poste tes cross-trades ici avec /cross-trade — Échange entre MM2, Blox Fruits, Adopt Me, Pet Sim X et +',
+      });
+
+      // Message épinglé d'explication
+      const infoEmbed = new EmbedBuilder()
+        .setColor(0x9B59B6)
+        .setAuthor({ name: '🔀 Cross Trade Panel — Wenzy Bot' })
+        .setDescription([
+          '**Qu\'est-ce qu\'un Cross Trade ?**',
+          '> Échange d\'items entre deux jeux différents.',
+          '> Ex: une arme **MM2** contre une fruit **Blox Fruits**',
+          '',
+          '**Jeux supportés :**',
+          '> 🗡️ MM2 • 🍎 Blox Fruits • 🐾 Adopt Me • 🐱 Pet Sim X',
+          '> 🎮 N\'importe quel jeu Roblox',
+          '',
+          '**Comment poster ?**',
+          '> Utilise `/cross-trade` pour poster ton échange',
+          '',
+          '**Règles :**',
+          '> ✅ Vérifie ton compte Roblox avant de trader',
+          '> ✅ Utilise un middleman si valeur élevée',
+          '> ❌ Pas de scam — bannissement permanent',
+        ].join('\n'))
+        .setFooter({ text: 'Wenzy Bot • Cross Trade' })
+        .setTimestamp();
+
+      const infoMsg = await ch.send({ embeds: [infoEmbed] });
+      await infoMsg.pin().catch(() => {});
+
+      await interaction.editReply(`✅ Salon <#${ch.id}> créé avec succès !`);
+    }
+  },
+
   // ── /massrole ──────────────────────────────────────────────
   {
     data: new SlashCommandBuilder().setName('massrole').setDescription('⚡ (Admin) Donner ou retirer un rôle à tous les membres')
@@ -4750,6 +4859,118 @@ async function handleButton(interaction) {
   if (customId.startsWith('mm_cancel_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_cancel_',''));db.prepare('UPDATE trades SET status=? WHERE id=?').run('cancelled',tid);db.prepare('UPDATE private_servers SET in_use=0,trade_id=NULL WHERE trade_id=?').run(tid);return interaction.editReply(`❌ Trade **#${tid}** annulé.`);}
   if (customId.startsWith('mm_report_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_report_',''));db.prepare('UPDATE trades SET status=? WHERE id=?').run('disputed',tid);await sendLog(guild,new EmbedBuilder().setColor(C.danger).setDescription(`🚨 **SCAM REPORT** — Trade **#${tid}** signalé par <@${user.id}>.`).setTimestamp());return interaction.editReply('🚨 Scam reporté.');}
 
+  // ── Boutons Cross Trade ──────────────────────────────────
+  if (customId === 'ct_accept') {
+    await interaction.deferReply({ ephemeral: true });
+    // Trouver le cross trade par message_id
+    const ct = db.prepare('SELECT * FROM cross_trades WHERE message_id=? AND channel_id=?').get(interaction.message.id, interaction.channel.id);
+    if (!ct || ct.status !== 'open') return interaction.editReply('❌ Ce cross trade n\'est plus disponible.');
+    if (ct.poster_id === user.id) return interaction.editReply('❌ Tu ne peux pas accepter ton propre trade.');
+
+    db.prepare('UPDATE cross_trades SET accepter_id=?, status=? WHERE id=?').run(user.id, 'in_progress', ct.id);
+
+    // Créer un thread pour ce cross trade
+    const thread = await interaction.channel.threads.create({
+      name: `🔀 CT#${ct.id} — ${interaction.guild.members.cache.get(ct.poster_id)?.user.username ?? 'Trader'} × ${interaction.user.username}`,
+      autoArchiveDuration: 1440,
+      startMessage: interaction.message,
+    }).catch(() => null);
+
+    if (thread) {
+      db.prepare('UPDATE cross_trades SET thread_id=? WHERE id=?').run(thread.id, ct.id);
+      await thread.send({
+        content: `<@${ct.poster_id}> <@${user.id}>`,
+        embeds: [new EmbedBuilder()
+          .setColor(0x9B59B6)
+          .setAuthor({ name: `🔀 Cross Trade #CT${ct.id} — En cours` })
+          .addFields(
+            { name: `📤 ${ct.offer_game}`, value: ct.offer_items, inline: true },
+            { name: `📥 ${ct.want_game}`, value: ct.want_items, inline: true },
+            { name: '👤 Parties', value: `Vendeur : <@${ct.poster_id}>\nAcheteur : <@${user.id}>`, inline: false },
+          )
+          .setDescription('Coordonnez-vous ici. Un middleman peut être appelé si besoin.')
+          .setFooter({ text: 'Wenzy Bot • Cross Trade' })
+          .setTimestamp()],
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`ct_complete_${ct.id}`).setLabel('✅ Trade complété').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`ct_dispute_${ct.id}`).setLabel('🚨 Scam report').setStyle(ButtonStyle.Danger),
+        )],
+      });
+    }
+
+    await interaction.editReply(`✅ Tu as accepté le cross trade **#CT${ct.id}** ! Rendez-vous dans le thread.`);
+    return;
+  }
+
+  if (customId === 'ct_mm') {
+    await interaction.deferReply({ ephemeral: true });
+    const ct = db.prepare('SELECT * FROM cross_trades WHERE message_id=? AND channel_id=?').get(interaction.message.id, interaction.channel.id);
+    if (!ct || ct.status !== 'open') return interaction.editReply('❌ Ce cross trade n\'est plus disponible.');
+
+    // Notifier les mods/staff
+    await sendLog(guild, new EmbedBuilder()
+      .setColor(0x3498DB)
+      .setAuthor({ name: `🛡️ Middleman demandé — Cross Trade #CT${ct.id}` })
+      .addFields(
+        { name: 'Demandeur', value: `<@${user.id}>`, inline: true },
+        { name: 'Trader', value: `<@${ct.poster_id}>`, inline: true },
+        { name: `${ct.offer_game} → ${ct.want_game}`, value: `${ct.offer_items} → ${ct.want_items}`, inline: false },
+      ).setTimestamp());
+
+    return interaction.editReply('🛡️ Un middleman a été notifié. Patiente dans le salon.');
+  }
+
+  if (customId === 'ct_cancel') {
+    await interaction.deferReply({ ephemeral: true });
+    const ct = db.prepare('SELECT * FROM cross_trades WHERE message_id=? AND channel_id=?').get(interaction.message.id, interaction.channel.id);
+    if (!ct) return interaction.editReply('❌ Trade introuvable.');
+    if (ct.poster_id !== user.id && !hasStaffPerm(interaction.member)) return interaction.editReply('❌ Seul le posteur ou un staff peut annuler.');
+    if (ct.status !== 'open') return interaction.editReply('❌ Ce trade ne peut plus être annulé.');
+
+    db.prepare('UPDATE cross_trades SET status=? WHERE id=?').run('cancelled', ct.id);
+    await interaction.message.delete().catch(() => {});
+    return interaction.editReply('✅ Cross trade annulé.');
+  }
+
+  if (customId.startsWith('ct_complete_')) {
+    await interaction.deferReply({ ephemeral: true });
+    const ctId = parseInt(customId.replace('ct_complete_', ''));
+    const ct = db.prepare('SELECT * FROM cross_trades WHERE id=?').get(ctId);
+    if (!ct) return interaction.editReply('❌ Trade introuvable.');
+    if (ct.poster_id !== user.id && ct.accepter_id !== user.id && !hasStaffPerm(interaction.member)) {
+      return interaction.editReply('❌ Seules les parties du trade peuvent valider.');
+    }
+
+    db.prepare('UPDATE cross_trades SET status=?, completed_at=strftime(\'%s\',\'now\') WHERE id=?').run('completed', ctId);
+
+    // XP et coins pour les deux parties
+    for (const uid of [ct.poster_id, ct.accepter_id].filter(Boolean)) {
+      db.prepare('UPDATE users SET trade_count=trade_count+1, coins=coins+50 WHERE discord_id=?').run(uid);
+      await addXp(guild, uid, 25);
+    }
+
+    await sendLog(guild, new EmbedBuilder()
+      .setColor(C.success)
+      .setAuthor({ name: `✅ Cross Trade #CT${ctId} — Complété` })
+      .addFields(
+        { name: `${ct.offer_game} → ${ct.want_game}`, value: `${ct.offer_items} → ${ct.want_items}`, inline: false },
+        { name: 'Parties', value: `<@${ct.poster_id}> × <@${ct.accepter_id}>`, inline: true },
+      ).setTimestamp());
+
+    return interaction.editReply(`✅ Cross trade **#CT${ctId}** complété ! +25 XP et +50 🪙 pour chaque partie.`);
+  }
+
+  if (customId.startsWith('ct_dispute_')) {
+    await interaction.deferReply({ ephemeral: true });
+    const ctId = parseInt(customId.replace('ct_dispute_', ''));
+    db.prepare('UPDATE cross_trades SET status=? WHERE id=?').run('disputed', ctId);
+    await sendLog(guild, new EmbedBuilder()
+      .setColor(C.danger)
+      .setDescription(`🚨 **SCAM REPORT Cross Trade #CT${ctId}** signalé par <@${user.id}>`)
+      .setTimestamp());
+    return interaction.editReply('🚨 Report envoyé au staff.');
+  }
+
   if (customId.startsWith('duel_accept_')) {
     await interaction.deferReply();
     const duelId=parseInt(customId.replace('duel_accept_',''));
@@ -4778,38 +4999,57 @@ async function handleButton(interaction) {
   }
 
   // ── RATING BUTTONS (post-trade) ───────────────────────────────
-  // Clic sur une étoile → ouvre un modal avec commentaire optionnel
   if (customId.startsWith('rate_')) {
+    await interaction.deferReply({ ephemeral:true });
     const parts = customId.split('_'); // rate_5_tradeId_targetId
     const stars = parseInt(parts[1]);
     const tradeId = parseInt(parts[2]);
     const targetId = parts[3];
-    if (isNaN(stars) || isNaN(tradeId) || !targetId) {
-      await interaction.deferReply({ ephemeral:true });
-      return interaction.editReply('❌ Données invalides.');
-    }
-    // Check already rated avant d'ouvrir le modal
+    if (isNaN(stars) || isNaN(tradeId) || !targetId) return interaction.editReply('❌ Données invalides.');
+    // Check already rated
     const alreadyRated = db.prepare('SELECT 1 FROM trade_ratings WHERE from_id=? AND trade_id=?').get(user.id, tradeId);
-    if (alreadyRated) {
-      await interaction.deferReply({ ephemeral:true });
-      return interaction.editReply('❌ Tu as déjà noté ce trade.');
-    }
-    // Ouvre un modal avec commentaire optionnel
-    const modal = new ModalBuilder()
-      .setCustomId(`modal_rate_${stars}_${tradeId}_${targetId}`)
-      .setTitle(`⭐ Note ${stars}/5 — Laisser un commentaire`);
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('rate_comment')
-          .setLabel('Commentaire (optionnel)')
-          .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder('Ex: Trade rapide et sérieux, je recommande !')
-          .setRequired(false)
-          .setMaxLength(300)
-      )
-    );
-    return interaction.showModal(modal);
+    if (alreadyRated) return interaction.editReply('❌ Tu as déjà noté ce trade.');
+    db.prepare('INSERT INTO trade_ratings (from_id,to_id,trade_id,rating) VALUES (?,?,?,?)').run(user.id, targetId, tradeId, stars);
+    // Update vouch with rating
+    const avg = db.prepare('SELECT AVG(rating) as avg, COUNT(*) as cnt FROM trade_ratings WHERE to_id=?').get(targetId);
+    // Notify target
+    try{
+      const target = await interaction.client.users.fetch(targetId).catch(()=>null);
+      if(target){
+        await target.send({
+          embeds:[new EmbedBuilder().setColor(stars>=4?C.success:stars>=3?C.warning:C.danger)
+            .setAuthor({name:`⭐ Note reçue — Trade #${String(tradeId).padStart(4,'0')}`})
+            .setDescription(`<@${user.id}> t'a noté **${stars}/5 ⭐** pour le trade **#${tradeId}**.\n\n> Moyenne totale : **${avg.avg?.toFixed(1)??stars}/5** (${avg.cnt} avis)`)
+            .setFooter({text:'Wenzy Bot v9.0 • Système de notes'})
+            .setTimestamp()],
+        }).catch(()=>{});
+      }
+    }catch{}
+
+    // ── Vérifier si les 2 membres ont noté → archiver le thread ──
+    try{
+      const trade = db.prepare('SELECT * FROM trades WHERE id=?').get(tradeId);
+      if(trade?.thread_id && trade.poster_id && trade.accepter_id){
+        const rCount = db.prepare(
+          'SELECT COUNT(*) as c FROM trade_ratings WHERE trade_id=? AND (from_id=? OR from_id=?)'
+        ).get(tradeId, trade.poster_id, trade.accepter_id)?.c ?? 0;
+
+        if(rCount >= 2){
+          const thread = await interaction.guild?.channels.fetch(trade.thread_id).catch(()=>null);
+          if(thread){
+            await thread.send({
+              content:`<@${trade.poster_id}> <@${trade.accepter_id}>`,
+              embeds:[new EmbedBuilder().setColor(C.success)
+                .setDescription('✅ **Les deux notes ont été soumises.** Ce thread va être archivé dans 10 secondes.')
+                .setTimestamp()],
+            }).catch(()=>{});
+            setTimeout(()=>thread.setArchived(true,'Notes soumises — thread fermé automatiquement').catch(()=>{}), 10000);
+          }
+        }
+      }
+    }catch{}
+
+    return interaction.editReply(`✅ Note **${stars}⭐** envoyée à <@${targetId}> !`);
   }
 }
 
@@ -4884,77 +5124,6 @@ async function handleModal(interaction) {
       db.prepare('INSERT INTO shop_purchases (discord_id,item_type,item_data,coins_spent) VALUES (?,?,?,?)').run(interaction.user.id,'custom_role',JSON.stringify({name:roleName,color:colorInput}),500);
       await interaction.editReply(`✅ Rôle **${roleName}** créé et attribué !`);
     }catch(e){await interaction.editReply(`❌ Erreur : ${e.message}`);}
-  }
-
-  // ── RATING MODAL — enregistre note + commentaire ────────────
-  if (customId.startsWith('modal_rate_')) {
-    await interaction.deferReply({ ephemeral:true });
-    // modal_rate_<stars>_<tradeId>_<targetId>
-    const parts = customId.replace('modal_rate_','').split('_');
-    const stars = parseInt(parts[0]);
-    const tradeId = parseInt(parts[1]);
-    const targetId = parts[2];
-    const comment = interaction.fields.getTextInputValue('rate_comment')?.trim() || null;
-
-    if (isNaN(stars) || isNaN(tradeId) || !targetId) return interaction.editReply('❌ Données invalides.');
-
-    // Double-check déjà noté
-    const alreadyRated = db.prepare('SELECT 1 FROM trade_ratings WHERE from_id=? AND trade_id=?').get(interaction.user.id, tradeId);
-    if (alreadyRated) return interaction.editReply('❌ Tu as déjà noté ce trade.');
-
-    db.prepare('INSERT INTO trade_ratings (from_id,to_id,trade_id,rating) VALUES (?,?,?,?)').run(interaction.user.id, targetId, tradeId, stars);
-
-    // Mettre à jour le commentaire dans la table vouches si elle existe
-    db.prepare('UPDATE vouches SET comment=?, rating=? WHERE from_id!=? AND to_id=? AND trade_id=?')
-      .run(comment, stars, interaction.user.id, targetId, tradeId);
-
-    const avg = db.prepare('SELECT AVG(rating) as avg, COUNT(*) as cnt FROM trade_ratings WHERE to_id=?').get(targetId);
-
-    // Notifier la cible en DM
-    try {
-      const targetUser = await interaction.client.users.fetch(targetId).catch(()=>null);
-      if (targetUser) {
-        const commentLine = comment ? `\n> 💬 "${comment}"` : '';
-        await targetUser.send({
-          embeds:[new EmbedBuilder()
-            .setColor(stars>=4?C.success:stars>=3?C.warning:C.danger)
-            .setAuthor({name:`⭐ Note reçue — Trade #${String(tradeId).padStart(4,'0')}`})
-            .setDescription(`<@${interaction.user.id}> t'a noté **${stars}/5 ⭐** pour le trade **#${tradeId}**.${commentLine}\n\n> Moyenne totale : **${avg.avg?.toFixed(1)??stars}/5** (${avg.cnt} avis)`)
-            .setFooter({text:'Wenzy Bot v9.0 • Système de notes'})
-            .setTimestamp()],
-        }).catch(()=>{});
-      }
-    } catch {}
-
-    // Vérifier si les 2 membres ont noté → archiver le thread
-    try {
-      const trade = db.prepare('SELECT * FROM trades WHERE id=?').get(tradeId);
-      if (trade?.thread_id && trade.poster_id && trade.accepter_id) {
-        const rCount = db.prepare(
-          'SELECT COUNT(*) as c FROM trade_ratings WHERE trade_id=? AND (from_id=? OR from_id=?)'
-        ).get(tradeId, trade.poster_id, trade.accepter_id)?.c ?? 0;
-
-        if (rCount >= 2) {
-          // Chercher le thread dans n'importe quel guild du client
-          let thread = null;
-          for (const [, gld] of interaction.client.guilds.cache) {
-            thread = await gld.channels.fetch(trade.thread_id).catch(()=>null);
-            if (thread) break;
-          }
-          if (thread) {
-            await thread.send({
-              content:`<@${trade.poster_id}> <@${trade.accepter_id}>`,
-              embeds:[new EmbedBuilder().setColor(C.success)
-                .setDescription('✅ **Les deux notes ont été soumises. Merci !** Ce thread sera archivé dans 10 secondes.')
-                .setTimestamp()],
-            }).catch(()=>{});
-            setTimeout(()=>thread.setArchived(true,'Notes soumises — thread fermé automatiquement').catch(()=>{}), 10000);
-          }
-        }
-      }
-    } catch {}
-
-    return interaction.editReply(`✅ Note **${stars}⭐** envoyée${comment ? ' avec ton commentaire' : ''} !`);
   }
 
   // ── CANDIDATURE MODAL (suite après 5 premières questions) ────
@@ -5354,6 +5523,14 @@ client.once(Events.ClientReady, async()=>{
   }
   console.log(`[Giveaways] ${activeGiveaways.length} giveaway(s) repris`);
   console.log('[Wenzy Bot v9.0] Prêt. 6767');
+});
+
+// ── Anti-crash global ────────────────────────────────────────
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRASH] unhandledRejection:', reason);
 });
 
 client.login(process.env.DISCORD_TOKEN);
