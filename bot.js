@@ -1074,7 +1074,7 @@ async function fetchMM2Values() {
 // ── XP ROLES SYSTEM ─────────────────────────────────────────
 async function applyXpRoles(guild, member, xp) {
   try {
-    // ── Tiers par défaut : un seul rôle actif, tous les autres retirés ──
+    // ── Tiers par défaut : un seul rôle actif ──
     const currentTier = getXpTier(xp);
     for (const t of XP_TIERS) {
       const r = guild.roles.cache.find(role => role.name === t.roleSync);
@@ -1084,12 +1084,12 @@ async function applyXpRoles(guild, member, xp) {
       if (shouldHave && !hasIt) await member.roles.add(r).catch(()=>{});
       else if (!shouldHave && hasIt) await member.roles.remove(r).catch(()=>{});
     }
-    // ── Custom XP roles depuis /panel : on donne si xp >= seuil, retire sinon ──
+    // ── Custom XP roles : Number() forcé pour éviter bug string ──
     const customRoles = getXpRoles(guild.id);
     for (const cr of customRoles) {
       const role = guild.roles.cache.get(cr.role_id);
       if (!role) continue;
-      const shouldHave = xp >= cr.xp_threshold;
+      const shouldHave = Number(xp) >= Number(cr.xp_threshold); // ← FIX
       const hasIt = member.roles.cache.has(role.id);
       if (shouldHave && !hasIt) await member.roles.add(role).catch(()=>{});
       else if (!shouldHave && hasIt) await member.roles.remove(role).catch(()=>{});
@@ -2807,7 +2807,25 @@ const commands = [
           if(existing){existing.xp_threshold=seuil;}
           else{xpRoles.push({xp_threshold:seuil,role_id:role.id});}
           db.prepare('UPDATE server_config SET xp_roles=? WHERE guild_id=?').run(JSON.stringify(xpRoles),gid);
-          return interaction.editReply(`✅ XP role ajouté : **${seuil} XP** → <@&${role.id}>`);
+
+          // ← SYNCHRO IMMEDIATE : recalcule le rôle pour tous les membres
+          await interaction.guild.members.fetch().catch(()=>{});
+          let synced = 0;
+          for (const [, member] of interaction.guild.members.cache) {
+            if (member.user.bot) continue;
+            const u = db.prepare('SELECT xp FROM users WHERE discord_id=?').get(member.id);
+            if (!u) continue;
+            const r = interaction.guild.roles.cache.get(role.id);
+            if (!r) continue;
+            const shouldHave = Number(u.xp) >= Number(seuil);
+            const hasIt = member.roles.cache.has(r.id);
+            if (shouldHave && !hasIt) await member.roles.add(r).catch(()=>{});
+            else if (!shouldHave && hasIt) await member.roles.remove(r).catch(()=>{});
+            synced++;
+            if (synced % 10 === 0) await new Promise(r => setTimeout(r, 500));
+          }
+
+          return interaction.editReply(`✅ XP role ajouté : **${seuil} XP** → <@&${role.id}>\n🔄 Synchro effectuée sur **${synced}** membre(s).`);
         }
         if(action==='remove'){
           if(!role)return interaction.editReply('❌ Fournis `role`.');
@@ -4225,6 +4243,53 @@ const commands = [
     }
   },
 
+  // ── /resetxp ───────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName('resetxp')
+      .setDescription('🔄 (Admin) Remettre le XP de TOUS les membres à 0 et retirer tous les rôles XP')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral: true });
+      if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé aux admins.');
+      const guild = interaction.guild;
+
+      // Reset XP en DB
+      db.prepare('UPDATE users SET xp = 0').run();
+
+      // Retirer tous les rôles XP (défaut + custom) à tout le monde
+      await guild.members.fetch().catch(()=>{});
+      let count = 0;
+      for (const [, member] of guild.members.cache) {
+        if (member.user.bot) continue;
+        try {
+          // Retirer les tiers par défaut
+          for (const t of XP_TIERS) {
+            const r = guild.roles.cache.find(role => role.name === t.roleSync);
+            if (r && member.roles.cache.has(r.id)) await member.roles.remove(r).catch(()=>{});
+          }
+          // Retirer les custom XP roles
+          const customRoles = getXpRoles(guild.id);
+          for (const cr of customRoles) {
+            const r = guild.roles.cache.get(cr.role_id);
+            if (r && member.roles.cache.has(r.id)) await member.roles.remove(r).catch(()=>{});
+          }
+          count++;
+          if (count % 10 === 0) await new Promise(r => setTimeout(r, 1000));
+        } catch {}
+      }
+
+      await sendLog(guild, new EmbedBuilder().setColor(C.danger)
+        .setAuthor({ name: '🔄 Reset XP Global' })
+        .addFields(
+          { name: '✅ Membres reset', value: `${count}`, inline: true },
+          { name: '🛡️ Par', value: `<@${interaction.user.id}>`, inline: true },
+        ).setTimestamp());
+
+      await interaction.editReply(`✅ XP reset sur **${count}** membre(s) ! Tous les rôles XP retirés.`);
+    }
+  },
+
 ];
 
 // ══════════════════════════════════════════════════════════════
@@ -4887,8 +4952,7 @@ async function applyStatusRole(guild, member) {
 }
 
 function startStatusWatcher(client) {
-  // ── Event PresenceUpdate — INSTANTANÉ ────────────────────
-  // Déclenché dès que quelqu'un ajoute/retire/modifie son status Discord
+  // ── Event instantané dès qu'un membre change son status ──
   client.on(Events.PresenceUpdate, async (oldPresence, newPresence) => {
     try {
       const guild = newPresence?.guild ?? oldPresence?.guild;
@@ -4901,42 +4965,76 @@ function startStatusWatcher(client) {
       const statusRole = guild.roles.cache.get(cfg.status_role);
       if (!statusRole) return;
 
-      // On prend la présence directement depuis newPresence (déjà fraîche)
-      // et on fetch le membre pour avoir ses rôles à jour
-      const member = await guild.members.fetch(userId).catch(()=>null);
+      const member = await guild.members.fetch(userId).catch(() => null);
       if (!member || member.user.bot) return;
 
-      // Lire les activités depuis newPresence directement (pas member.presence qui peut être stale)
       const activities = newPresence?.activities ?? [];
-      const hasStatus = activities.some(a =>
-        a.state?.toLowerCase().includes('.gg/wenzy') ||
-        a.name?.toLowerCase().includes('.gg/wenzy') ||
-        a.details?.toLowerCase().includes('.gg/wenzy')
-      );
+      const hasStatus = activities.some(a => {
+        const texts = [a.state, a.name, a.details].filter(Boolean).map(t => t.toLowerCase());
+        return texts.some(t => t.includes('.gg/wenzy'));
+      });
 
       const hasRole = member.roles.cache.has(statusRole.id);
       if (hasStatus && !hasRole) {
-        await member.roles.add(statusRole).catch(()=>{});
+        await member.roles.add(statusRole).catch(() => {});
+        console.log(`[Status] +rôle → ${member.user.username}`);
       } else if (!hasStatus && hasRole) {
-        await member.roles.remove(statusRole).catch(()=>{});
+        await member.roles.remove(statusRole).catch(() => {});
+        console.log(`[Status] -rôle → ${member.user.username}`);
       }
-    } catch {}
+    } catch (e) {
+      console.error('[PresenceUpdate]', e.message);
+    }
   });
 
-  // ── Cron de rattrapage toutes les 5 min (membres qui étaient offline) ──
-  cron.schedule('*/5 * * * *', async () => {
+  // ── Scan au démarrage (membres déjà connectés) ──
+  setTimeout(async () => {
     for (const [, guild] of client.guilds.cache) {
       const cfg = getConfig(guild.id);
       if (!cfg?.status_role) continue;
       const statusRole = guild.roles.cache.get(cfg.status_role);
       if (!statusRole) continue;
       try {
-        const members = await guild.members.fetch({ withPresences: true }).catch(()=>null);
+        const members = await guild.members.fetch({ withPresences: true }).catch(() => null);
         if (!members) continue;
         for (const [, member] of members) {
           if (member.user.bot) continue;
-          await applyStatusRole(guild, member);
-          await new Promise(r => setTimeout(r, 50));
+          const activities = member.presence?.activities ?? [];
+          const hasStatus = activities.some(a => {
+            const texts = [a.state, a.name, a.details].filter(Boolean).map(t => t.toLowerCase());
+            return texts.some(t => t.includes('.gg/wenzy'));
+          });
+          const hasRole = member.roles.cache.has(statusRole.id);
+          if (hasStatus && !hasRole) await member.roles.add(statusRole).catch(() => {});
+          else if (!hasStatus && hasRole) await member.roles.remove(statusRole).catch(() => {});
+          await new Promise(r => setTimeout(r, 100));
+        }
+        console.log('[Status] Scan démarrage terminé');
+      } catch {}
+    }
+  }, 30000);
+
+  // ── Cron rattrapage toutes les 10 min ──
+  cron.schedule('*/10 * * * *', async () => {
+    for (const [, guild] of client.guilds.cache) {
+      const cfg = getConfig(guild.id);
+      if (!cfg?.status_role) continue;
+      const statusRole = guild.roles.cache.get(cfg.status_role);
+      if (!statusRole) continue;
+      try {
+        const members = await guild.members.fetch({ withPresences: true }).catch(() => null);
+        if (!members) continue;
+        for (const [, member] of members) {
+          if (member.user.bot) continue;
+          const activities = member.presence?.activities ?? [];
+          const hasStatus = activities.some(a => {
+            const texts = [a.state, a.name, a.details].filter(Boolean).map(t => t.toLowerCase());
+            return texts.some(t => t.includes('.gg/wenzy'));
+          });
+          const hasRole = member.roles.cache.has(statusRole.id);
+          if (hasStatus && !hasRole) await member.roles.add(statusRole).catch(() => {});
+          else if (!hasStatus && hasRole) await member.roles.remove(statusRole).catch(() => {});
+          await new Promise(r => setTimeout(r, 100));
         }
       } catch {}
     }
