@@ -644,9 +644,19 @@ db.exec(`
     created_at INTEGER DEFAULT (strftime('%s','now')),
     completed_at INTEGER
   );
+  CREATE TABLE IF NOT EXISTS ct_ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ct_id INTEGER NOT NULL,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    comment TEXT,
+    created_at INTEGER DEFAULT (strftime('%s','now'))
+  );
 `);
 
 const safeMigrations = [
+  `CREATE TABLE IF NOT EXISTS ct_ratings (id INTEGER PRIMARY KEY AUTOINCREMENT, ct_id INTEGER NOT NULL, from_id TEXT NOT NULL, to_id TEXT NOT NULL, rating INTEGER NOT NULL, comment TEXT, created_at INTEGER DEFAULT (strftime('%s','now')))`,
   'ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0',
   'ALTER TABLE users ADD COLUMN vocal_minutes INTEGER DEFAULT 0',
   'ALTER TABLE users ADD COLUMN daily_streak INTEGER DEFAULT 0',
@@ -724,6 +734,17 @@ function ratingButtons(tradeId, targetId) {
     new ButtonBuilder().setCustomId(`rate_3_${tradeId}_${targetId}`).setLabel('⭐⭐⭐').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`rate_4_${tradeId}_${targetId}`).setLabel('⭐⭐⭐⭐').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`rate_5_${tradeId}_${targetId}`).setLabel('⭐⭐⭐⭐⭐').setStyle(ButtonStyle.Success),
+  );
+}
+
+// ── CT RATING BUTTONS ─────────────────────────────────────────
+function ctRatingButtons(ctId, fromId, toId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`ct_rate_1_${ctId}_${fromId}_${toId}`).setLabel('⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ct_rate_2_${ctId}_${fromId}_${toId}`).setLabel('⭐⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ct_rate_3_${ctId}_${fromId}_${toId}`).setLabel('⭐⭐⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ct_rate_4_${ctId}_${fromId}_${toId}`).setLabel('⭐⭐⭐⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ct_rate_5_${ctId}_${fromId}_${toId}`).setLabel('⭐⭐⭐⭐⭐').setStyle(ButtonStyle.Success),
   );
 }
 
@@ -4797,19 +4818,40 @@ async function handleButton(interaction) {
       await ctVouchesCh.send({ embeds: [vouchEmb] }).catch(() => {});
     }
 
-    // Notifier le thread si présent
+    // Notifier le thread si présent + envoyer les boutons de note obligatoires
     if (ct.thread_id) {
       try {
         const thr = await guild.channels.fetch(ct.thread_id).catch(() => null);
         if (thr) {
+          // Message de confirmation
           await thr.send({
             content: `<@${ct.poster_id}>${ct.accepter_id ? ` <@${ct.accepter_id}>` : ''}`,
             embeds: [new EmbedBuilder().setColor(0x57F287)
               .setAuthor({ name: `✅ Cross Trade #CT${ctId} validé par le staff !` })
-              .setDescription('🎉 Le trade est confirmé. +50 🪙 et +25 XP pour chaque partie.\nCe thread sera archivé dans 30 secondes.')
+              .setDescription([
+                '🎉 Le trade est confirmé. **+50 🪙 et +25 XP** pour chaque partie.',
+                '',
+                '📝 **Étape finale obligatoire :**',
+                '> Les **2 parties** doivent laisser une note pour fermer ce thread.',
+                '> Sans les 2 notes, le thread reste ouvert.',
+              ].join('\n'))
               .setTimestamp()],
           }).catch(() => {});
-          setTimeout(() => thr.setArchived(true, 'Cross trade complété').catch(() => {}), 30000);
+
+          // Boutons de note pour le POSTER
+          if (ct.poster_id) {
+            await thr.send({
+              content: `<@${ct.poster_id}> — Note ton expérience avec <@${ct.accepter_id ?? '?'}> :`,
+              components: [ctRatingButtons(ctId, ct.poster_id, ct.accepter_id)],
+            }).catch(() => {});
+          }
+          // Boutons de note pour l'ACCEPTER
+          if (ct.accepter_id) {
+            await thr.send({
+              content: `<@${ct.accepter_id}> — Note ton expérience avec <@${ct.poster_id}> :`,
+              components: [ctRatingButtons(ctId, ct.accepter_id, ct.poster_id)],
+            }).catch(() => {});
+          }
         }
       } catch {}
     }
@@ -5193,6 +5235,10 @@ async function handleButton(interaction) {
     if (!ct || ct.status !== 'open') return interaction.editReply('❌ Ce cross trade n\'est plus disponible.');
     if (ct.poster_id === user.id) return interaction.editReply('❌ Tu ne peux pas accepter ton propre trade.');
 
+    // ── Vérification Roblox obligatoire ──
+    const accUser = db.prepare('SELECT * FROM users WHERE discord_id=?').get(user.id);
+    if (!accUser?.verified) return interaction.editReply('❌ Tu dois lier et vérifier ton compte Roblox dans **#lier-roblox** avant d\'accepter un cross trade.');
+
     db.prepare('UPDATE cross_trades SET accepter_id=?, status=? WHERE id=?').run(user.id, 'in_progress', ct.id);
 
     // Mettre à jour l'embed dans ct-post-trades (marquer en cours)
@@ -5236,15 +5282,15 @@ async function handleButton(interaction) {
             '**📋 Pour finaliser le cross trade :**',
             '1. Échangez dans chaque jeu respectif',
             '2. Prenez un **screenshot** de chaque transaction',
-            '3. Envoyez les 2 screenshots ici',
-            '4. ⚠️ Un staff validera manuellement',
+            '3. Envoyez les **screenshots ici** pour validation',
             '',
-            '> Le vouch sera envoyé dans **#ct-vouches** après validation staff.',
+            '⚠️ **Le trade DOIT être validé par un Middleman ou un Staff.**',
+            '> Sans validation staff, le vouch ne sera pas accordé.',
+            '> Le thread se fermera automatiquement après les notes des 2 parties.',
           ].join('\n'))
-          .setFooter({ text: 'Wenzy Bot v9.0 • Cross Trade' })
+          .setFooter({ text: 'Wenzy Bot v9.0 • Cross Trade — MM obligatoire' })
           .setTimestamp()],
         components: [new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`ct_complete_${ct.id}`).setLabel('✅ Trade complété (sans MM)').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`ct_dispute_${ct.id}`).setLabel('🚨 Scam report').setStyle(ButtonStyle.Danger),
         )],
       }).catch(() => {});
@@ -5316,31 +5362,100 @@ async function handleButton(interaction) {
   }
 
   if (customId.startsWith('ct_complete_')) {
+    // ── Bouton désactivé : MM obligatoire pour les cross trades ──
     await interaction.deferReply({ ephemeral: true });
-    const ctId = parseInt(customId.replace('ct_complete_', ''));
+    return interaction.editReply([
+      '❌ **Validation directe non autorisée.**',
+      '',
+      'Les cross trades **doivent obligatoirement** passer par un **Middleman** ou un **Staff** pour être validés.',
+      '> Envoie tes screenshots dans ce thread et attends la validation.',
+    ].join('\n'));
+  }
+
+  // ── Notes Cross Trade ──────────────────────────────────────────
+  if (customId.startsWith('ct_rate_')) {
+    await interaction.deferReply({ ephemeral: true });
+    // Format : ct_rate_<stars>_<ctId>_<fromId>_<toId>
+    const parts = customId.split('_'); // ['ct','rate',stars,ctId,fromId,toId]
+    const stars  = parseInt(parts[2]);
+    const ctId   = parseInt(parts[3]);
+    const fromId = parts[4];
+    const toId   = parts[5];
+
+    if (user.id !== fromId) return interaction.editReply('❌ Ce bouton ne t\'est pas destiné.');
+    if (isNaN(stars) || isNaN(ctId)) return interaction.editReply('❌ Données invalides.');
+
+    // Vérifier déjà noté
+    const alreadyRated = db.prepare('SELECT 1 FROM ct_ratings WHERE ct_id=? AND from_id=?').get(ctId, fromId);
+    if (alreadyRated) return interaction.editReply('⚠️ Tu as déjà noté ce cross trade.');
+
     const ct = db.prepare('SELECT * FROM cross_trades WHERE id=?').get(ctId);
-    if (!ct) return interaction.editReply('❌ Trade introuvable.');
-    if (ct.poster_id !== user.id && ct.accepter_id !== user.id && !hasStaffPerm(interaction.member)) {
-      return interaction.editReply('❌ Seules les parties du trade peuvent valider.');
+    if (!ct) return interaction.editReply('❌ Cross trade introuvable.');
+    if (ct.status !== 'completed') return interaction.editReply('❌ Ce cross trade n\'est pas encore complété.');
+
+    db.prepare('INSERT INTO ct_ratings (ct_id, from_id, to_id, rating) VALUES (?,?,?,?)').run(ctId, fromId, toId, stars);
+
+    // Notifier la personne notée en DM
+    try {
+      const target = await interaction.client.users.fetch(toId).catch(() => null);
+      if (target) {
+        await target.send({
+          embeds: [new EmbedBuilder()
+            .setColor(stars >= 4 ? C.success : stars >= 3 ? C.warning : C.danger)
+            .setAuthor({ name: `⭐ Note reçue — Cross Trade #CT${String(ctId).padStart(4,'0')}` })
+            .setDescription(`<@${fromId}> t'a noté **${stars}/5 ⭐** pour le cross trade **#CT${ctId}**.`)
+            .setFooter({ text: 'Wenzy Bot v9.0 • Cross Trade' })
+            .setTimestamp()],
+        }).catch(() => {});
+      }
+    } catch {}
+
+    // Vérifier si les 2 parties ont noté → supprimer le thread
+    const rCount = db.prepare(
+      'SELECT COUNT(*) as c FROM ct_ratings WHERE ct_id=? AND (from_id=? OR from_id=?)'
+    ).get(ctId, ct.poster_id, ct.accepter_id)?.c ?? 0;
+
+    if (rCount >= 2) {
+      // Publier dans ct-vouches avec les notes
+      const ctVouchesCh = guild.channels.cache.find(c => c.name.includes('ct-vouches'));
+      if (ctVouchesCh) {
+        const ratings = db.prepare('SELECT * FROM ct_ratings WHERE ct_id=?').all(ctId);
+        const ratingStr = ratings.map(r => `<@${r.from_id}> → <@${r.to_id}> : ${'⭐'.repeat(r.rating)}`).join('\n');
+        const vouchEmb = new EmbedBuilder()
+          .setColor(0x57F287)
+          .setAuthor({ name: `✅ CROSS TRADE #CT${String(ctId).padStart(4,'0')} — NOTES FINALES` })
+          .setDescription(`<@${ct.poster_id}> × <@${ct.accepter_id ?? '?'}>`)
+          .addFields(
+            { name: `📤 ${ct.offer_game}`, value: ct.offer_items, inline: true },
+            { name: `📥 ${ct.want_game}`, value: ct.want_items, inline: true },
+            { name: '⭐ Notes', value: ratingStr, inline: false },
+            { name: '🛡️ Validé par', value: ct.middleman_id ? `<@${ct.middleman_id}>` : 'Staff', inline: false },
+            ...(ct.screenshot_url ? [{ name: '📸 Screenshot', value: `[Voir](${ct.screenshot_url})`, inline: false }] : []),
+          )
+          .setFooter({ text: 'Wenzy Bot v9.0 • Cross Trade' })
+          .setTimestamp();
+        if (ct.screenshot_url) vouchEmb.setImage(ct.screenshot_url);
+        await ctVouchesCh.send({ embeds: [vouchEmb] }).catch(() => {});
+      }
+
+      // Message final dans le thread puis suppression
+      if (ct.thread_id) {
+        try {
+          const thr = await guild.channels.fetch(ct.thread_id).catch(() => null);
+          if (thr) {
+            await thr.send({
+              content: `<@${ct.poster_id}> <@${ct.accepter_id ?? ''}>`,
+              embeds: [new EmbedBuilder().setColor(0x57F287)
+                .setDescription('✅ **Les 2 notes ont été soumises.** Ce thread sera supprimé dans **10 secondes**.')
+                .setTimestamp()],
+            }).catch(() => {});
+            setTimeout(() => thr.delete('Cross trade complété — notes soumises').catch(() => {}), 10000);
+          }
+        } catch {}
+      }
     }
 
-    db.prepare('UPDATE cross_trades SET status=?, completed_at=strftime(\'%s\',\'now\') WHERE id=?').run('completed', ctId);
-
-    // XP et coins pour les deux parties
-    for (const uid of [ct.poster_id, ct.accepter_id].filter(Boolean)) {
-      db.prepare('UPDATE users SET trade_count=trade_count+1, coins=coins+50 WHERE discord_id=?').run(uid);
-      await addXp(guild, uid, 25);
-    }
-
-    await sendLog(guild, new EmbedBuilder()
-      .setColor(C.success)
-      .setAuthor({ name: `✅ Cross Trade #CT${ctId} — Complété` })
-      .addFields(
-        { name: `${ct.offer_game} → ${ct.want_game}`, value: `${ct.offer_items} → ${ct.want_items}`, inline: false },
-        { name: 'Parties', value: `<@${ct.poster_id}> × <@${ct.accepter_id}>`, inline: true },
-      ).setTimestamp());
-
-    return interaction.editReply(`✅ Cross trade **#CT${ctId}** complété ! +25 XP et +50 🪙 pour chaque partie.`);
+    return interaction.editReply(`✅ Note **${stars}⭐** envoyée !`);
   }
 
   if (customId.startsWith('ct_dispute_')) {
