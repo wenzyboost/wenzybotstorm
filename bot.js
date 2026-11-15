@@ -54,209 +54,236 @@ try {
 async function buildLevelUpImage(discordUser, oldTier, newTier, xp) {
   if (!createCanvas) return null;
   try {
-    const W = 800, H = 280;
+    const W = 900, H = 320;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext('2d');
     const tierHex = `#${newTier.color.toString(16).padStart(6,'0')}`;
+    const oldHex  = `#${oldTier.color.toString(16).padStart(6,'0')}`;
 
-    // ── FOND ULTRA DARK ──────────────────────────────────────
+    // ── FOND ULTRA DARK avec dégradé diagonal ────────────────
     const bgGrad = ctx.createLinearGradient(0, 0, W, H);
-    bgGrad.addColorStop(0, '#0d0d1a');
-    bgGrad.addColorStop(0.5, '#111122');
-    bgGrad.addColorStop(1, '#0a0a16');
+    bgGrad.addColorStop(0,   '#050510');
+    bgGrad.addColorStop(0.4, '#0a0a1a');
+    bgGrad.addColorStop(1,   '#080820');
     ctx.fillStyle = bgGrad;
-    ctx.roundRect(0, 0, W, H, 24);
+    ctx.roundRect(0, 0, W, H, 28);
     ctx.fill();
 
-    // ── GLOW RADIAL DERRIÈRE L'AVATAR ───────────────────────
-    const glowX = 130, glowY = 130;
-    const glow = ctx.createRadialGradient(glowX, glowY, 10, glowX, glowY, 180);
-    glow.addColorStop(0, `${tierHex}55`);
-    glow.addColorStop(0.5, `${tierHex}18`);
-    glow.addColorStop(1, 'transparent');
-    ctx.fillStyle = glow;
+    // ── GRANDE ZONE COLORÉE DERRIÈRE AVATAR ─────────────────
+    const glowX = 148, glowY = 155;
+    const glow0 = ctx.createRadialGradient(glowX, glowY, 0, glowX, glowY, 220);
+    glow0.addColorStop(0, `${tierHex}60`);
+    glow0.addColorStop(0.5, `${tierHex}22`);
+    glow0.addColorStop(1, 'transparent');
+    ctx.fillStyle = glow0;
     ctx.fillRect(0, 0, W, H);
 
-    // ── GLOW CÔTÉ DROIT (ambiance) ───────────────────────────
-    const glow2 = ctx.createRadialGradient(W, 0, 20, W, 0, 300);
-    glow2.addColorStop(0, `${tierHex}22`);
-    glow2.addColorStop(1, 'transparent');
-    ctx.fillStyle = glow2;
+    // ── GLOW CÔTÉ DROIT ──────────────────────────────────────
+    const glowR = ctx.createRadialGradient(W - 80, H / 2, 0, W - 80, H / 2, 280);
+    glowR.addColorStop(0, `${tierHex}30`);
+    glowR.addColorStop(1, 'transparent');
+    ctx.fillStyle = glowR;
     ctx.fillRect(0, 0, W, H);
 
-    // ── PARTICULES DÉCO ──────────────────────────────────────
-    const particles = [
-      {x:460,y:30,r:3},{x:620,y:55,r:2},{x:530,y:80,r:1.5},
-      {x:700,y:30,r:2.5},{x:750,y:70,r:1},{x:490,y:20,r:1.5},
-      {x:670,y:90,r:3},{x:580,y:45,r:2},{x:720,y:120,r:1.5},
-      {x:440,y:60,r:1},{x:760,y:20,r:2},{x:510,y:100,r:2.5},
+    // ── BARRE HORIZONTALE TOP colorée (effet "bannière") ─────
+    const bannerGrad = ctx.createLinearGradient(0, 0, W, 0);
+    bannerGrad.addColorStop(0, `${tierHex}00`);
+    bannerGrad.addColorStop(0.15, `${tierHex}bb`);
+    bannerGrad.addColorStop(0.85, `${tierHex}bb`);
+    bannerGrad.addColorStop(1, `${tierHex}00`);
+    ctx.fillStyle = bannerGrad;
+    ctx.fillRect(0, 0, W, 5);
+
+    // ── BARRE HORIZONTALE BOTTOM ──────────────────────────────
+    ctx.fillStyle = bannerGrad;
+    ctx.fillRect(0, H - 5, W, 5);
+
+    // ── PARTICULES ÉTOILES ÉPARPILLÉES ───────────────────────
+    const stars = [
+      {x:480,y:22,r:3.5},{x:600,y:40,r:2},{x:720,y:18,r:3},
+      {x:555,y:65,r:1.5},{x:810,y:35,r:2.5},{x:650,y:85,r:1.5},
+      {x:760,y:70,r:2},{x:840,y:90,r:1},{x:490,y:50,r:1.5},
+      {x:870,y:55,r:2.5},{x:530,y:95,r:3},{x:690,y:50,r:1},
+      {x:580,y:30,r:1.5},{x:745,y:100,r:2},{x:820,y:120,r:1.5},
     ];
-    for (const p of particles) {
+    for (const s of stars) {
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `${tierHex}cc`;
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = `${tierHex}ee`;
       ctx.fill();
     }
 
-    // ── BORDURE GLOW TIER ────────────────────────────────────
-    ctx.strokeStyle = `${tierHex}66`;
+    // ── BORDURE GLOW ─────────────────────────────────────────
+    for (let i = 3; i > 0; i--) {
+      ctx.strokeStyle = `${tierHex}${(i * 15).toString(16).padStart(2,'0')}`;
+      ctx.lineWidth = i * 2;
+      ctx.roundRect(i, i, W - i * 2, H - i * 2, 28 - i);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = `${tierHex}99`;
     ctx.lineWidth = 2;
-    ctx.roundRect(1, 1, W - 2, H - 2, 24);
+    ctx.roundRect(1, 1, W - 2, H - 2, 28);
     ctx.stroke();
-
-    // ── BARRE DÉCO TOP ───────────────────────────────────────
-    const topBar = ctx.createLinearGradient(0, 0, W, 0);
-    topBar.addColorStop(0, 'transparent');
-    topBar.addColorStop(0.3, tierHex);
-    topBar.addColorStop(0.7, tierHex);
-    topBar.addColorStop(1, 'transparent');
-    ctx.fillStyle = topBar;
-    ctx.fillRect(0, 0, W, 3);
 
     // ── AVATAR ───────────────────────────────────────────────
     const avatarURL = discordUser.displayAvatarURL({ extension: 'png', size: 256 });
     try {
       const img = await loadImage(avatarURL);
-      // Outer glow ring
-      for (let i = 5; i > 0; i--) {
+      // Cercles glow animés autour de l'avatar
+      for (let i = 6; i > 0; i--) {
         ctx.beginPath();
-        ctx.arc(glowX, glowY, 72 + i * 3, 0, Math.PI * 2);
-        ctx.strokeStyle = `${tierHex}${Math.round(20 + i * 8).toString(16).padStart(2,'0')}`;
-        ctx.lineWidth = 2;
+        ctx.arc(glowX, glowY, 78 + i * 4, 0, Math.PI * 2);
+        ctx.strokeStyle = `${tierHex}${(i * 12).toString(16).padStart(2,'0')}`;
+        ctx.lineWidth = 2.5;
         ctx.stroke();
       }
-      // Clip avatar
+      // Avatar clippé
       ctx.save();
       ctx.beginPath();
-      ctx.arc(glowX, glowY, 70, 0, Math.PI * 2);
+      ctx.arc(glowX, glowY, 76, 0, Math.PI * 2);
       ctx.closePath();
       ctx.clip();
-      ctx.drawImage(img, glowX - 70, glowY - 70, 140, 140);
+      ctx.drawImage(img, glowX - 76, glowY - 76, 152, 152);
       ctx.restore();
-      // Sharp ring
+      // Ring net
       ctx.beginPath();
-      ctx.arc(glowX, glowY, 72, 0, Math.PI * 2);
+      ctx.arc(glowX, glowY, 78, 0, Math.PI * 2);
       ctx.strokeStyle = tierHex;
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 5;
+      ctx.stroke();
+      // Petit ring intérieur blanc
+      ctx.beginPath();
+      ctx.arc(glowX, glowY, 73, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth = 2;
       ctx.stroke();
     } catch {}
 
-    // ── BADGE TIER (coins droit de l'avatar) ─────────────────
-    const badgeX = glowX + 52, badgeY = glowY + 52;
+    // ── BADGE EMOJI TIER ──────────────────────────────────────
+    const badgeX = glowX + 56, badgeY = glowY + 56;
+    // Fond badge
     ctx.beginPath();
-    ctx.arc(badgeX, badgeY, 20, 0, Math.PI * 2);
-    ctx.fillStyle = '#0d0d1a';
+    ctx.arc(badgeX, badgeY, 24, 0, Math.PI * 2);
+    ctx.fillStyle = '#05051a';
     ctx.fill();
     ctx.strokeStyle = tierHex;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 4;
     ctx.stroke();
-    ctx.font = 'bold 16px sans-serif';
+    ctx.font = '20px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ffffff';
     ctx.fillText(newTier.emoji, badgeX, badgeY);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
 
-    // ── TITRE LEVEL UP ───────────────────────────────────────
-    const textX = 240;
+    // ── ZONE TEXTE ───────────────────────────────────────────
+    const TX = 265;
 
-    // Label "LEVEL UP" en petit caps stylé
+    // ── "LEVEL UP" badge pill ─────────────────────────────────
+    const pillW = 130, pillH = 26, pillX = TX, pillY = 28;
+    ctx.fillStyle = `${tierHex}30`;
+    ctx.strokeStyle = `${tierHex}80`;
+    ctx.lineWidth = 1.5;
+    ctx.roundRect(pillX, pillY, pillW, pillH, 13);
+    ctx.fill();
+    ctx.stroke();
     ctx.font = 'bold 13px sans-serif';
-    ctx.fillStyle = `${tierHex}`;
-    ctx.letterSpacing = '4px';
-    ctx.fillText('▲  LEVEL  UP', textX, 55);
-    ctx.letterSpacing = '0px';
-
-    // Nom du tier
-    ctx.font = 'bold 46px sans-serif';
-    const nameGrad = ctx.createLinearGradient(textX, 60, textX + 400, 110);
-    nameGrad.addColorStop(0, '#ffffff');
-    nameGrad.addColorStop(1, tierHex);
-    ctx.fillStyle = nameGrad;
-    ctx.fillText(newTier.name, textX, 108);
-
-    // Ancien tier barré / flèche
-    ctx.font = '15px sans-serif';
-    ctx.fillStyle = '#555577';
-    ctx.fillText(`${oldTier.emoji}  ${oldTier.name}  →  `, textX, 135);
-    const arrowOffset = ctx.measureText(`${oldTier.emoji}  ${oldTier.name}  →  `).width;
     ctx.fillStyle = tierHex;
-    ctx.font = 'bold 15px sans-serif';
-    ctx.fillText(`${newTier.emoji}  ${newTier.name}`, textX + arrowOffset, 135);
+    ctx.textAlign = 'center';
+    ctx.fillText('▲  LEVEL  UP', pillX + pillW / 2, pillY + 17);
+    ctx.textAlign = 'left';
 
-    // XP count
+    // ── NOM DU TIER en TRÈS grand ─────────────────────────────
+    ctx.font = 'bold 60px sans-serif';
+    const nameGrad = ctx.createLinearGradient(TX, 60, TX + 500, 130);
+    nameGrad.addColorStop(0, '#ffffff');
+    nameGrad.addColorStop(0.6, tierHex);
+    nameGrad.addColorStop(1, `${tierHex}99`);
+    ctx.fillStyle = nameGrad;
+    ctx.fillText(newTier.name, TX, 118);
+
+    // ── Transition ancien → nouveau tier ─────────────────────
+    ctx.font = '16px sans-serif';
+    ctx.fillStyle = '#44445a';
+    const oldText = `${oldTier.emoji}  ${oldTier.name}`;
+    ctx.fillText(oldText, TX, 148);
+    const oldW = ctx.measureText(oldText).width;
+    // Flèche colorée
+    ctx.fillStyle = `${tierHex}cc`;
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText(`  →  ${newTier.emoji}  ${newTier.name}`, TX + oldW, 148);
+
+    // ── XP TOTAL ──────────────────────────────────────────────
     ctx.font = '14px sans-serif';
-    ctx.fillStyle = '#6666aa';
-    ctx.fillText(`✨  ${xp.toLocaleString('fr-FR')} XP total`, textX, 158);
+    ctx.fillStyle = '#5555aa';
+    ctx.fillText(`✨  ${xp.toLocaleString('fr-FR')} XP total accumulé`, TX, 174);
 
-    // ── BARRE DE PROGRESSION ─────────────────────────────────
-    const barX = textX, barY = 178, barW = 510, barH = 26, barR = 13;
+    // ── BARRE DE PROGRESSION ÉPAISSE ──────────────────────────
+    const barX = TX, barY = 194, barW = W - TX - 36, barH = 34, barR = 17;
 
-    // Shadow / fond
-    ctx.fillStyle = '#1a1a2e';
+    // Track fond
+    ctx.fillStyle = '#0e0e22';
     ctx.roundRect(barX, barY, barW, barH, barR);
     ctx.fill();
+    ctx.strokeStyle = `${tierHex}30`;
+    ctx.lineWidth = 1;
+    ctx.roundRect(barX, barY, barW, barH, barR);
+    ctx.stroke();
 
-    // Inner dark track
-    ctx.fillStyle = '#0d0d1a';
-    ctx.roundRect(barX + 2, barY + 2, barW - 4, barH - 4, barR - 1);
+    // Calcul progression vers prochain tier
+    const nextXpTier = getNextXpTier(xp);
+    const rawPct = nextXpTier ? Math.min(1, (xp - newTier.xp) / (nextXpTier.xp - newTier.xp)) : 1;
+    const fillW = Math.max(barR * 2, (barW - 4) * rawPct);
+    const pctLabel = Math.round(rawPct * 100);
+
+    // Gradient barre remplie
+    const barFill = ctx.createLinearGradient(barX, 0, barX + fillW, 0);
+    barFill.addColorStop(0,   '#3344cc');
+    barFill.addColorStop(0.4, tierHex);
+    barFill.addColorStop(0.8, `${tierHex}dd`);
+    barFill.addColorStop(1,   '#ffffffaa');
+    ctx.fillStyle = barFill;
+    ctx.roundRect(barX + 2, barY + 2, fillW, barH - 4, barR - 1);
     ctx.fill();
 
-    // Calcul progression
-    const nextTier = getNextXpTier(xp);
-    const pct = nextTier ? Math.min(1, (xp - newTier.xp) / (nextTier.xp - newTier.xp)) : 1;
-    const fillW = Math.max(barR * 2, barW * pct);
-
-    // Gradient barre
-    const barGrad = ctx.createLinearGradient(barX, 0, barX + fillW, 0);
-    barGrad.addColorStop(0, '#5865F2');
-    barGrad.addColorStop(0.5, tierHex);
-    barGrad.addColorStop(1, '#ffffff44');
-    ctx.fillStyle = barGrad;
-    ctx.roundRect(barX + 2, barY + 2, fillW - 4, barH - 4, barR - 1);
-    ctx.fill();
-
-    // Shine sur la barre
+    // Shine supérieure
     const shine = ctx.createLinearGradient(barX, barY, barX, barY + barH);
-    shine.addColorStop(0, 'rgba(255,255,255,0.18)');
-    shine.addColorStop(0.5, 'transparent');
+    shine.addColorStop(0, 'rgba(255,255,255,0.22)');
+    shine.addColorStop(0.4, 'rgba(255,255,255,0.08)');
+    shine.addColorStop(1, 'transparent');
     ctx.fillStyle = shine;
-    ctx.roundRect(barX + 2, barY + 2, fillW - 4, barH / 2, barR - 1);
+    ctx.roundRect(barX + 2, barY + 2, fillW, (barH - 4) / 2, barR - 1);
     ctx.fill();
 
-    // Texte dans la barre
-    ctx.font = 'bold 12px sans-serif';
+    // Texte centré dans la barre
+    ctx.font = 'bold 13px sans-serif';
     ctx.fillStyle = '#ffffff';
-    const barLabel = nextTier
-      ? `${Math.round(pct * 100)}%  —  ${xp.toLocaleString('fr-FR')} / ${nextTier.xp.toLocaleString('fr-FR')} XP`
-      : '⭐  NIVEAU MAXIMUM ATTEINT';
-    ctx.fillText(barLabel, barX + 12, barY + 17);
+    ctx.textAlign = 'center';
+    const xpLabel = nextXpTier
+      ? `${pctLabel}%  ·  ${xp.toLocaleString('fr-FR')} / ${nextXpTier.xp.toLocaleString('fr-FR')} XP`
+      : '⭐  NIVEAU MAXIMUM — GOAT MODE';
+    ctx.fillText(xpLabel, barX + barW / 2, barY + 22);
+    ctx.textAlign = 'left';
 
-    // Label prochain niveau
-    if (nextTier) {
+    // Label prochain tier à droite
+    if (nextXpTier) {
       ctx.font = '11px sans-serif';
-      ctx.fillStyle = `${tierHex}cc`;
+      ctx.fillStyle = `${tierHex}bb`;
       ctx.textAlign = 'right';
-      ctx.fillText(`→ ${nextTier.name}`, barX + barW, barY - 5);
+      ctx.fillText(`Prochain : ${nextXpTier.name} ${nextXpTier.emoji}`, barX + barW, barY - 6);
       ctx.textAlign = 'left';
     }
 
-    // ── FOOTER ───────────────────────────────────────────────
-    const footerY = H - 18;
-    ctx.fillStyle = '#2a2a40';
-    ctx.fillRect(textX, footerY - 1, barW, 1);
-
-    ctx.font = '11px sans-serif';
-    ctx.fillStyle = '#333355';
-    ctx.fillText('Wenzy Bot v8.0  •  Système XP', textX, footerY + 12);
-
-    // ── USERNAME en haut à droite ─────────────────────────────
+    // ── USERNAME + DATE bas droite ────────────────────────────
     const uname = discordUser.displayName ?? discordUser.username;
-    ctx.font = 'bold 14px sans-serif';
-    ctx.fillStyle = '#8888bb';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillStyle = '#6666aa';
     ctx.textAlign = 'right';
-    ctx.fillText(`@${uname}`, W - 24, H - 18);
+    ctx.fillText(`@${uname}`, W - 20, H - 24);
+    // Petit "Wenzy Bot" discret
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#222235';
+    ctx.fillText('Wenzy Bot v9.0  •  Système XP', W - 20, H - 10);
     ctx.textAlign = 'left';
 
     const buffer = canvas.toBuffer('image/png');
@@ -2999,7 +3026,7 @@ const commands = [
       const did = target.id;
       db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(did);
       const userData = db.prepare('SELECT * FROM users WHERE discord_id=?').get(did);
-      const xp = userData?.xp ?? 0;
+      const xp = safeUserData?.xp ?? 0;
       const currentTier = getXpTier(xp);
       const nextTier = getNextXpTier(xp);
       const bar = xpProgressBar(xp, 20);
@@ -3008,8 +3035,9 @@ const commands = [
       // Canvas image — carte de stats complète
       let files = [];
       let imgBuffer = null;
+      const safeUserData = userData ?? { xp:0, coins:0, trade_count:0, vouch_count:0, daily_streak:0 };
       try {
-        imgBuffer = await buildProfileImage(target, userData);
+        imgBuffer = await buildProfileImage(target, safeUserData);
         if (imgBuffer) files = [{ attachment: imgBuffer, name: 'level.png' }];
       } catch {}
 
@@ -3048,11 +3076,11 @@ const commands = [
           .addFields(
             { name: `${currentTier.emoji} Niveau`, value: `**${currentTier.name}**`, inline: true },
             { name: '✨ XP', value: `**${xp.toLocaleString('fr-FR')}**`, inline: true },
-            { name: '🔥 Streak', value: `**${userData?.daily_streak ?? 0}j**`, inline: true },
+            { name: '🔥 Streak', value: `**${safeUserData?.daily_streak ?? 0}j**`, inline: true },
             { name: '📊 Progression', value: `\`[${bar}] ${pct}%\`\n${nextTier ? `→ **${nextTier.name}** à ${nextTier.xp} XP` : '🏆 MAX'}${customRolesLine}`, inline: false },
-            { name: '🗡️ Trades', value: `**${userData?.trade_count ?? 0}**`, inline: true },
-            { name: '💬 Vouches', value: `**${userData?.vouch_count ?? 0}**`, inline: true },
-            { name: '🪙 Pièces', value: `**${(userData?.coins ?? 0).toLocaleString('fr-FR')}**`, inline: true },
+            { name: '🗡️ Trades', value: `**${safeUserData?.trade_count ?? 0}**`, inline: true },
+            { name: '💬 Vouches', value: `**${safeUserData?.vouch_count ?? 0}**`, inline: true },
+            { name: '🪙 Pièces', value: `**${(safeUserData?.coins ?? 0).toLocaleString('fr-FR')}**`, inline: true },
           );
       }
 
@@ -3189,10 +3217,19 @@ const commands = [
     async execute(interaction) {
       await interaction.deferReply();
       const target = interaction.options.getUser('membre')??interaction.user;
+      // Crée la row si elle n'existe pas encore (membre jamais actif)
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(target.id);
       const user = db.prepare('SELECT * FROM users WHERE discord_id=?').get(target.id);
-      if (!user) return interaction.editReply(`❌ <@${target.id}> n'a pas encore de profil.`);
       const inv = db.prepare('SELECT * FROM inventory WHERE discord_id=?').all(target.id);
-      await interaction.editReply({embeds:[profileEmbed(user,inv,target)]});
+      // Essaie d'envoyer l'image canvas profil
+      let files = [];
+      try {
+        const imgBuffer = await buildProfileImage(target, user);
+        if (imgBuffer) files = [{ attachment: imgBuffer, name: 'profil.png' }];
+      } catch {}
+      const embed = new EmbedBuilder(profileEmbed(user, inv, target).data);
+      if (files.length) embed.setImage('attachment://profil.png');
+      await interaction.editReply({ embeds: [embed], files });
     }
   },
 
@@ -4741,57 +4778,38 @@ async function handleButton(interaction) {
   }
 
   // ── RATING BUTTONS (post-trade) ───────────────────────────────
+  // Clic sur une étoile → ouvre un modal avec commentaire optionnel
   if (customId.startsWith('rate_')) {
-    await interaction.deferReply({ ephemeral:true });
     const parts = customId.split('_'); // rate_5_tradeId_targetId
     const stars = parseInt(parts[1]);
     const tradeId = parseInt(parts[2]);
     const targetId = parts[3];
-    if (isNaN(stars) || isNaN(tradeId) || !targetId) return interaction.editReply('❌ Données invalides.');
-    // Check already rated
+    if (isNaN(stars) || isNaN(tradeId) || !targetId) {
+      await interaction.deferReply({ ephemeral:true });
+      return interaction.editReply('❌ Données invalides.');
+    }
+    // Check already rated avant d'ouvrir le modal
     const alreadyRated = db.prepare('SELECT 1 FROM trade_ratings WHERE from_id=? AND trade_id=?').get(user.id, tradeId);
-    if (alreadyRated) return interaction.editReply('❌ Tu as déjà noté ce trade.');
-    db.prepare('INSERT INTO trade_ratings (from_id,to_id,trade_id,rating) VALUES (?,?,?,?)').run(user.id, targetId, tradeId, stars);
-    // Update vouch with rating
-    const avg = db.prepare('SELECT AVG(rating) as avg, COUNT(*) as cnt FROM trade_ratings WHERE to_id=?').get(targetId);
-    // Notify target
-    try{
-      const target = await interaction.client.users.fetch(targetId).catch(()=>null);
-      if(target){
-        await target.send({
-          embeds:[new EmbedBuilder().setColor(stars>=4?C.success:stars>=3?C.warning:C.danger)
-            .setAuthor({name:`⭐ Note reçue — Trade #${String(tradeId).padStart(4,'0')}`})
-            .setDescription(`<@${user.id}> t'a noté **${stars}/5 ⭐** pour le trade **#${tradeId}**.\n\n> Moyenne totale : **${avg.avg?.toFixed(1)??stars}/5** (${avg.cnt} avis)`)
-            .setFooter({text:'Wenzy Bot v9.0 • Système de notes'})
-            .setTimestamp()],
-        }).catch(()=>{});
-      }
-    }catch{}
-
-    // ── Vérifier si les 2 membres ont noté → archiver le thread ──
-    try{
-      const trade = db.prepare('SELECT * FROM trades WHERE id=?').get(tradeId);
-      if(trade?.thread_id && trade.poster_id && trade.accepter_id){
-        const rCount = db.prepare(
-          'SELECT COUNT(*) as c FROM trade_ratings WHERE trade_id=? AND (from_id=? OR from_id=?)'
-        ).get(tradeId, trade.poster_id, trade.accepter_id)?.c ?? 0;
-
-        if(rCount >= 2){
-          const thread = await interaction.guild?.channels.fetch(trade.thread_id).catch(()=>null);
-          if(thread){
-            await thread.send({
-              content:`<@${trade.poster_id}> <@${trade.accepter_id}>`,
-              embeds:[new EmbedBuilder().setColor(C.success)
-                .setDescription('✅ **Les deux notes ont été soumises.** Ce thread va être archivé dans 10 secondes.')
-                .setTimestamp()],
-            }).catch(()=>{});
-            setTimeout(()=>thread.setArchived(true,'Notes soumises — thread fermé automatiquement').catch(()=>{}), 10000);
-          }
-        }
-      }
-    }catch{}
-
-    return interaction.editReply(`✅ Note **${stars}⭐** envoyée à <@${targetId}> !`);
+    if (alreadyRated) {
+      await interaction.deferReply({ ephemeral:true });
+      return interaction.editReply('❌ Tu as déjà noté ce trade.');
+    }
+    // Ouvre un modal avec commentaire optionnel
+    const modal = new ModalBuilder()
+      .setCustomId(`modal_rate_${stars}_${tradeId}_${targetId}`)
+      .setTitle(`⭐ Note ${stars}/5 — Laisser un commentaire`);
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('rate_comment')
+          .setLabel('Commentaire (optionnel)')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('Ex: Trade rapide et sérieux, je recommande !')
+          .setRequired(false)
+          .setMaxLength(300)
+      )
+    );
+    return interaction.showModal(modal);
   }
 }
 
@@ -4866,6 +4884,77 @@ async function handleModal(interaction) {
       db.prepare('INSERT INTO shop_purchases (discord_id,item_type,item_data,coins_spent) VALUES (?,?,?,?)').run(interaction.user.id,'custom_role',JSON.stringify({name:roleName,color:colorInput}),500);
       await interaction.editReply(`✅ Rôle **${roleName}** créé et attribué !`);
     }catch(e){await interaction.editReply(`❌ Erreur : ${e.message}`);}
+  }
+
+  // ── RATING MODAL — enregistre note + commentaire ────────────
+  if (customId.startsWith('modal_rate_')) {
+    await interaction.deferReply({ ephemeral:true });
+    // modal_rate_<stars>_<tradeId>_<targetId>
+    const parts = customId.replace('modal_rate_','').split('_');
+    const stars = parseInt(parts[0]);
+    const tradeId = parseInt(parts[1]);
+    const targetId = parts[2];
+    const comment = interaction.fields.getTextInputValue('rate_comment')?.trim() || null;
+
+    if (isNaN(stars) || isNaN(tradeId) || !targetId) return interaction.editReply('❌ Données invalides.');
+
+    // Double-check déjà noté
+    const alreadyRated = db.prepare('SELECT 1 FROM trade_ratings WHERE from_id=? AND trade_id=?').get(interaction.user.id, tradeId);
+    if (alreadyRated) return interaction.editReply('❌ Tu as déjà noté ce trade.');
+
+    db.prepare('INSERT INTO trade_ratings (from_id,to_id,trade_id,rating) VALUES (?,?,?,?)').run(interaction.user.id, targetId, tradeId, stars);
+
+    // Mettre à jour le commentaire dans la table vouches si elle existe
+    db.prepare('UPDATE vouches SET comment=?, rating=? WHERE from_id!=? AND to_id=? AND trade_id=?')
+      .run(comment, stars, interaction.user.id, targetId, tradeId);
+
+    const avg = db.prepare('SELECT AVG(rating) as avg, COUNT(*) as cnt FROM trade_ratings WHERE to_id=?').get(targetId);
+
+    // Notifier la cible en DM
+    try {
+      const targetUser = await interaction.client.users.fetch(targetId).catch(()=>null);
+      if (targetUser) {
+        const commentLine = comment ? `\n> 💬 "${comment}"` : '';
+        await targetUser.send({
+          embeds:[new EmbedBuilder()
+            .setColor(stars>=4?C.success:stars>=3?C.warning:C.danger)
+            .setAuthor({name:`⭐ Note reçue — Trade #${String(tradeId).padStart(4,'0')}`})
+            .setDescription(`<@${interaction.user.id}> t'a noté **${stars}/5 ⭐** pour le trade **#${tradeId}**.${commentLine}\n\n> Moyenne totale : **${avg.avg?.toFixed(1)??stars}/5** (${avg.cnt} avis)`)
+            .setFooter({text:'Wenzy Bot v9.0 • Système de notes'})
+            .setTimestamp()],
+        }).catch(()=>{});
+      }
+    } catch {}
+
+    // Vérifier si les 2 membres ont noté → archiver le thread
+    try {
+      const trade = db.prepare('SELECT * FROM trades WHERE id=?').get(tradeId);
+      if (trade?.thread_id && trade.poster_id && trade.accepter_id) {
+        const rCount = db.prepare(
+          'SELECT COUNT(*) as c FROM trade_ratings WHERE trade_id=? AND (from_id=? OR from_id=?)'
+        ).get(tradeId, trade.poster_id, trade.accepter_id)?.c ?? 0;
+
+        if (rCount >= 2) {
+          // Chercher le thread dans n'importe quel guild du client
+          let thread = null;
+          for (const [, gld] of interaction.client.guilds.cache) {
+            thread = await gld.channels.fetch(trade.thread_id).catch(()=>null);
+            if (thread) break;
+          }
+          if (thread) {
+            await thread.send({
+              content:`<@${trade.poster_id}> <@${trade.accepter_id}>`,
+              embeds:[new EmbedBuilder().setColor(C.success)
+                .setDescription('✅ **Les deux notes ont été soumises. Merci !** Ce thread sera archivé dans 10 secondes.')
+                .setTimestamp()],
+            }).catch(()=>{});
+            setTimeout(()=>thread.setArchived(true,'Notes soumises — thread fermé automatiquement').catch(()=>{}), 10000);
+          }
+        }
+      }
+    } catch {}
+
+    return interaction.editReply(`✅ Note **${stars}⭐** envoyée${comment ? ' avec ton commentaire' : ''} !`);
   }
 
   // ── CANDIDATURE MODAL (suite après 5 premières questions) ────
