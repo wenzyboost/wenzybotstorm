@@ -747,12 +747,12 @@ const C = {
 
 // ── XP SYSTEM ────────────────────────────────────────────────
 const XP_TIERS = [
-  { xp:      0, name: '5 - Débutants',    color: 0x95A5A6, emoji: '🌱', roleSync: '5 - Débutants' },
-  { xp:   5000, name: '10 - Bavards',     color: 0x2ECC71, emoji: '💬', roleSync: '10 - Bavards' },
-  { xp:  10000, name: '15 - Pipelettes',  color: 0x27AE60, emoji: '🗣️', roleSync: '15 - Pipelettes' },
-  { xp:  15000, name: '20 - Puants',      color: 0x3498DB, emoji: '💨', roleSync: '20 - Puants' },
-  { xp:  20000, name: '30 - Elites',      color: 0x9B59B6, emoji: '⭐', roleSync: '30 - Elites' },
-  { xp:  30000, name: '50 - Goat',        color: 0xF1C40F, emoji: '🐐', roleSync: '50 - Goat' },
+  { xp:      5000, name: '5 - Débutants',    color: 0x95A5A6, emoji: '🌱', roleSync: '5 - Débutants' },
+  { xp:   10000, name: '10 - Bavards',     color: 0x2ECC71, emoji: '💬', roleSync: '10 - Bavards' },
+  { xp:  15000, name: '15 - Pipelettes',  color: 0x27AE60, emoji: '🗣️', roleSync: '15 - Pipelettes' },
+  { xp:  20000, name: '20 - Puants',      color: 0x3498DB, emoji: '💨', roleSync: '20 - Puants' },
+  { xp:  30000, name: '30 - Elites',      color: 0x9B59B6, emoji: '⭐', roleSync: '30 - Elites' },
+  { xp:  50000, name: '50 - Goat',        color: 0xF1C40F, emoji: '🐐', roleSync: '50 - Goat' },
 ];
 
 function getXpTier(xp) {
