@@ -748,11 +748,11 @@ const C = {
 // ── XP SYSTEM ────────────────────────────────────────────────
 const XP_TIERS = [
   { xp:      0, name: '5 - Débutants',    color: 0x95A5A6, emoji: '🌱', roleSync: '5 - Débutants' },
-  { xp:    300, name: '10 - Bavards',     color: 0x2ECC71, emoji: '💬', roleSync: '10 - Bavards' },
-  { xp:    900, name: '15 - Pipelettes',  color: 0x27AE60, emoji: '🗣️', roleSync: '15 - Pipelettes' },
-  { xp:   2000, name: '20 - Puants',      color: 0x3498DB, emoji: '💨', roleSync: '20 - Puants' },
-  { xp:   4000, name: '30 - Elites',      color: 0x9B59B6, emoji: '⭐', roleSync: '30 - Elites' },
-  { xp:   8000, name: '50 - Goat',        color: 0xF1C40F, emoji: '🐐', roleSync: '50 - Goat' },
+  { xp:   5000, name: '10 - Bavards',     color: 0x2ECC71, emoji: '💬', roleSync: '10 - Bavards' },
+  { xp:  10000, name: '15 - Pipelettes',  color: 0x27AE60, emoji: '🗣️', roleSync: '15 - Pipelettes' },
+  { xp:  15000, name: '20 - Puants',      color: 0x3498DB, emoji: '💨', roleSync: '20 - Puants' },
+  { xp:  20000, name: '30 - Elites',      color: 0x9B59B6, emoji: '⭐', roleSync: '30 - Elites' },
+  { xp:  30000, name: '50 - Goat',        color: 0xF1C40F, emoji: '🐐', roleSync: '50 - Goat' },
 ];
 
 function getXpTier(xp) {
@@ -1381,7 +1381,7 @@ async function completeTrade(guild, tradeId, screenshotUrl) {
       uid===trade.poster_id?trade.accepter_id:trade.poster_id,uid,tradeId
     );
     db.prepare('UPDATE users SET vouch_count=vouch_count+1 WHERE discord_id=?').run(uid);
-    await addXp(guild,uid,50);
+    await addXp(guild,uid,25); // 25 XP par trade complété
     try{
       const member = await guild.members.fetch(uid).catch(()=>null);
       if(member){
@@ -3025,13 +3025,31 @@ const commands = [
         embed.setImage('attachment://level.png');
       } else {
         // Fallback texte si canvas absent
+        // ── Custom XP roles : calculer lesquels sont acquis / prochain ──
+        const customXpRoles = getXpRoles(interaction.guild.id)
+          .sort((a, b) => Number(a.xp_threshold) - Number(b.xp_threshold));
+        const acquis = customXpRoles.filter(r => Number(xp) >= Number(r.xp_threshold));
+        const prochainCustom = customXpRoles.find(r => Number(xp) < Number(r.xp_threshold));
+
+        let customRolesLine = '';
+        if (customXpRoles.length > 0) {
+          const acquisTxt = acquis.length
+            ? acquis.map(r => `<@&${r.role_id}> ✅`).join(' ')
+            : 'Aucun encore';
+          customRolesLine = `\n\n🏷️ **Rôles XP :** ${acquisTxt}`;
+          if (prochainCustom) {
+            const manque = Number(prochainCustom.xp_threshold) - Number(xp);
+            customRolesLine += `\n→ <@&${prochainCustom.role_id}> dans **${manque.toLocaleString('fr-FR')} XP**`;
+          }
+        }
+
         embed
           .setThumbnail(target.displayAvatarURL({ size: 256 }))
           .addFields(
             { name: `${currentTier.emoji} Niveau`, value: `**${currentTier.name}**`, inline: true },
             { name: '✨ XP', value: `**${xp.toLocaleString('fr-FR')}**`, inline: true },
             { name: '🔥 Streak', value: `**${userData?.daily_streak ?? 0}j**`, inline: true },
-            { name: '📊 Progression', value: `\`[${bar}] ${pct}%\`\n${nextTier ? `→ **${nextTier.name}** à ${nextTier.xp} XP` : '🏆 MAX'}`, inline: false },
+            { name: '📊 Progression', value: `\`[${bar}] ${pct}%\`\n${nextTier ? `→ **${nextTier.name}** à ${nextTier.xp} XP` : '🏆 MAX'}${customRolesLine}`, inline: false },
             { name: '🗡️ Trades', value: `**${userData?.trade_count ?? 0}**`, inline: true },
             { name: '💬 Vouches', value: `**${userData?.vouch_count ?? 0}**`, inline: true },
             { name: '🪙 Pièces', value: `**${(userData?.coins ?? 0).toLocaleString('fr-FR')}**`, inline: true },
@@ -5081,11 +5099,11 @@ client.on(Events.MessageCreate, async message=>{
   const uid=message.author.id,now=Date.now();
 
   const cfg=getConfig(message.guild?.id);
-  if (!msgCooldowns.has(uid)||now-msgCooldowns.get(uid)>=60000) {
+  if (!msgCooldowns.has(uid)||now-msgCooldowns.get(uid)>=180000) {
     msgCooldowns.set(uid,now);
     db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(uid);
     if (cfg?.xp_enabled!==0&&message.guild) {
-      const xpGain=Math.floor(Math.random()*11)+15;
+      const xpGain=Math.floor(Math.random()*11)+5; // 5–15 XP, cooldown 3 min
       await addXp(message.guild,uid,xpGain);
     }
     if (cfg?.coins_enabled!==0) {
@@ -5153,7 +5171,7 @@ client.on(Events.VoiceStateUpdate, async(old,neu)=>{
         if (min>0) {
           db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(uid);
           if(cfg?.coins_enabled!==0)db.prepare('UPDATE users SET vocal_minutes=vocal_minutes+?,coins=coins+? WHERE discord_id=?').run(min,min*10,uid);
-          if(cfg?.xp_enabled!==0)await addXp(guild,uid,min*10).catch(()=>{});
+          if(cfg?.xp_enabled!==0)await addXp(guild,uid,min*5).catch(()=>{}); // 5 XP/min
         }
         db.prepare('DELETE FROM vocal_sessions WHERE discord_id=?').run(uid);
       }
@@ -5167,7 +5185,7 @@ client.on(Events.VoiceStateUpdate, async(old,neu)=>{
   if (old.channelId&&neu.channelId&&old.channelId!==neu.channelId) {
     if (!isIdleChannel(old.channel)) {
       const s=db.prepare('SELECT * FROM vocal_sessions WHERE discord_id=?').get(uid);
-      if (s){const min=Math.floor((Math.floor(Date.now()/1000)-s.joined_at)/60);if(min>0){db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(uid);if(cfg?.coins_enabled!==0)db.prepare('UPDATE users SET vocal_minutes=vocal_minutes+?,coins=coins+? WHERE discord_id=?').run(min,min*10,uid);if(cfg?.xp_enabled!==0)await addXp(guild,uid,min*10).catch(()=>{});}}
+      if (s){const min=Math.floor((Math.floor(Date.now()/1000)-s.joined_at)/60);if(min>0){db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(uid);if(cfg?.coins_enabled!==0)db.prepare('UPDATE users SET vocal_minutes=vocal_minutes+?,coins=coins+? WHERE discord_id=?').run(min,min*10,uid);if(cfg?.xp_enabled!==0)await addXp(guild,uid,min*5).catch(()=>{});}}
     }
     db.prepare('DELETE FROM vocal_sessions WHERE discord_id=?').run(uid);
     if (!isIdleChannel(neu.channel)) db.prepare(`INSERT OR REPLACE INTO vocal_sessions (discord_id,joined_at) VALUES (?,strftime('%s','now'))`).run(uid);
