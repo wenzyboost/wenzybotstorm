@@ -658,7 +658,6 @@ const safeMigrations = [
   'ALTER TABLE server_config ADD COLUMN status_role TEXT DEFAULT NULL',
   'ALTER TABLE server_config ADD COLUMN xp_roles TEXT DEFAULT \'[]\'',
   'ALTER TABLE server_config ADD COLUMN ticket_categories TEXT DEFAULT \'["Report","Giveaway","Scam","Candidature"]\'',
-  'ALTER TABLE server_config ADD COLUMN cross_trade_channel TEXT DEFAULT NULL',
 ];
 for (const m of safeMigrations) { try { db.exec(m); } catch {} }
 
@@ -1718,6 +1717,109 @@ async function restoreAllRoles(guild) {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  CROSS TRADE HELPERS
+// ══════════════════════════════════════════════════════════════
+
+// Embed d'un cross trade publié dans ct-post-trades
+function crossTradeEmbed(ct, posterMember) {
+  const gameEmoji = (game) => {
+    const g = (game ?? '').toLowerCase();
+    if (g.includes('mm2') || g.includes('murder')) return '🗡️';
+    if (g.includes('adopt')) return '🐾';
+    if (g.includes('jailbreak')) return '🚗';
+    if (g.includes('blox') || g.includes('fruit')) return '⚔️';
+    if (g.includes('pet') || g.includes('simulator')) return '🐶';
+    return '🎮';
+  };
+
+  return new EmbedBuilder()
+    .setColor(0x9B59B6)
+    .setAuthor({
+      name: `🔀 CROSS TRADE #CT${String(ct.id).padStart(4, '0')}`,
+      iconURL: posterMember?.user?.displayAvatarURL() ?? null,
+    })
+    .addFields(
+      {
+        name: `📤 Offre — ${gameEmoji(ct.offer_game)} ${ct.offer_game}`,
+        value: ct.offer_items,
+        inline: true,
+      },
+      {
+        name: `📥 Recherche — ${gameEmoji(ct.want_game)} ${ct.want_game}`,
+        value: ct.want_items,
+        inline: true,
+      },
+      {
+        name: '👤 Trader',
+        value: `<@${ct.poster_id}>\n📊 ${db.prepare('SELECT trade_count FROM users WHERE discord_id=?').get(ct.poster_id)?.trade_count ?? 0} trades`,
+        inline: false,
+      },
+    )
+    .setFooter({ text: `Wenzy Bot v9.0 • Cross Trade posté le ${new Date(ct.created_at * 1000).toLocaleDateString('fr-FR')}` })
+    .setTimestamp();
+}
+
+// Boutons d'un cross trade ouvert
+function crossTradeButtons(ctId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ct_accept').setLabel('✅ Accepter').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('ct_mm').setLabel('🛡️ Middleman').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('ct_cancel').setLabel('❌ Annuler').setStyle(ButtonStyle.Danger),
+  );
+}
+
+// Poster un cross trade depuis modal ou slash command
+async function postCrossTrade(interaction, offreJeu, offreItems, chercheJeu, chercheItems) {
+  const { guild, user } = interaction;
+
+  // Chercher le salon ct-post-trades
+  const ctPostCh = guild.channels.cache.find(c => c.name.includes('ct-post-trades'));
+  if (!ctPostCh) {
+    return interaction.editReply('❌ Salon **#ct-post-trades** introuvable. Lance d\'abord `/crosstrade setup`.');
+  }
+
+  // Vérif compte existant
+  db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(user.id);
+
+  // Insertion en base
+  const res = db.prepare(
+    'INSERT INTO cross_trades (poster_id, offer_game, offer_items, want_game, want_items, channel_id) VALUES (?,?,?,?,?,?)'
+  ).run(user.id, offreJeu.trim(), offreItems.trim(), chercheJeu.trim(), chercheItems.trim(), ctPostCh.id);
+
+  const ct = db.prepare('SELECT * FROM cross_trades WHERE id=?').get(res.lastInsertRowid);
+  const posterMember = await guild.members.fetch(user.id).catch(() => null);
+
+  const embed = crossTradeEmbed(ct, posterMember);
+  const msg = await ctPostCh.send({
+    embeds: [embed],
+    components: [crossTradeButtons(ct.id)],
+  }).catch(() => null);
+
+  if (msg) {
+    db.prepare('UPDATE cross_trades SET message_id=?, channel_id=? WHERE id=?').run(msg.id, ctPostCh.id, ct.id);
+  }
+
+  await sendLog(guild, new EmbedBuilder().setColor(0x9B59B6)
+    .setAuthor({ name: `🔀 Cross Trade #CT${ct.id} posté` })
+    .addFields(
+      { name: '👤 Trader', value: `<@${user.id}>`, inline: true },
+      { name: `📤 ${offreJeu}`, value: offreItems.slice(0, 200), inline: true },
+      { name: `📥 ${chercheJeu}`, value: chercheItems.slice(0, 200), inline: true },
+    )
+    .setTimestamp());
+
+  return interaction.editReply(`✅ Cross Trade **#CT${ct.id}** posté dans <#${ctPostCh.id}> !`);
+}
+
+// Boutons de validation staff dans ct-middleman-panel
+function ctStaffButtons(ctId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`ct_staff_validate_${ctId}`).setLabel('✅ Valider le trade').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`ct_staff_reject_${ctId}`).setLabel('❌ Rejeter / Scam').setStyle(ButtonStyle.Danger),
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
 //  COMMANDS
 // ══════════════════════════════════════════════════════════════
 const commands = [
@@ -2630,7 +2732,6 @@ const commands = [
             {name:'🎵 TikTok notifs',value:'tiktok'},
             {name:'⭐ Level up',value:'level'},
             {name:'🎉 Giveaways',value:'giveaway'},
-            {name:'🔀 Cross Trade',value:'cross_trade'},
           ))
         .addChannelOption(o=>o.setName('salon').setDescription('Salon à assigner').setRequired(true)))
       .addSubcommand(s=>s.setName('features').setDescription('🔧 Activer/désactiver des fonctionnalités')
@@ -2734,7 +2835,7 @@ const commands = [
       if (sub === 'channels') {
         const type = interaction.options.getString('type');
         const salon = interaction.options.getChannel('salon');
-        const colMap = {logs:'logs_channel',welcome:'welcome_channel',trades:'trades_channel',ticket:'ticket_channel',announcement:'announcement_channel',youtube:'youtube_channel',tiktok:'tiktok_channel',level:'level_channel',giveaway:'giveaway_channel',cross_trade:'cross_trade_channel'};
+        const colMap = {logs:'logs_channel',welcome:'welcome_channel',trades:'trades_channel',ticket:'ticket_channel',announcement:'announcement_channel',youtube:'youtube_channel',tiktok:'tiktok_channel',level:'level_channel',giveaway:'giveaway_channel'};
         const col = colMap[type];
         if (!col) return interaction.editReply('❌ Type invalide.');
         db.prepare(`UPDATE server_config SET ${col}=? WHERE guild_id=?`).run(salon.id,gid);
@@ -3363,118 +3464,6 @@ const commands = [
     async execute(interaction){await interaction.deferReply({ephemeral:true});await fetchMM2Values();const count=db.prepare('SELECT COUNT(*) as c FROM weapon_values').get().c;await interaction.editReply(`✅ Sync terminée. **${count}** armes.`);}
   },
 
-  // /crosstrade
-  {
-    data: new SlashCommandBuilder()
-      .setName('crosstrade')
-      .setDescription('🔀 Système de Cross Trades (échanges inter-jeux)')
-      .addSubcommand(s => s
-        .setName('setup')
-        .setDescription('⚙️ (Admin) Envoyer le panel Cross Trade dans le salon configuré')
-      )
-      .addSubcommand(s => s
-        .setName('post')
-        .setDescription('📤 Poster un cross trade')
-        .addStringOption(o => o.setName('offre-jeu').setDescription('Jeu de ce que tu offres (ex: MM2, Adopt Me)').setRequired(true))
-        .addStringOption(o => o.setName('offre-items').setDescription('Items offerts (séparés par virgules)').setRequired(true))
-        .addStringOption(o => o.setName('cherche-jeu').setDescription('Jeu de ce que tu cherches').setRequired(true))
-        .addStringOption(o => o.setName('cherche-items').setDescription('Items recherchés (séparés par virgules)').setRequired(true))
-      ),
-    async execute(interaction) {
-      await interaction.deferReply({ ephemeral: true });
-      const sub = interaction.options.getSubcommand();
-      const guild = interaction.guild;
-      const cfg = getConfig(guild.id);
-
-      // ── SETUP ──────────────────────────────────────────────
-      if (sub === 'setup') {
-        if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
-
-        const ctCh = cfg?.cross_trade_channel
-          ? guild.channels.cache.get(cfg.cross_trade_channel)
-          : guild.channels.cache.find(c => c.name.includes('cross-trade') || c.name.includes('crosstrade') || c.name.includes('trade-cross'));
-
-        if (!ctCh) return interaction.editReply(
-          '❌ Aucun salon Cross Trade configuré.\n' +
-          '**Configure-le d\'abord :**\n' +
-          '`/panel channels type:🔀 Cross Trade salon:#ton-salon`\n\n' +
-          'Ou crée un salon dont le nom contient `cross-trade`.'
-        );
-
-        await ctCh.send({
-          embeds: [new EmbedBuilder()
-            .setColor(0x9B59B6)
-            .setAuthor({ name: '🔀 Cross Trade — Wenzy MM2', iconURL: guild.iconURL() ?? undefined })
-            .setDescription([
-              '**Échange tes items entre différents jeux !**',
-              '',
-              '📤 **Comment ça marche ?**',
-              '**1.** Clique sur **Poster un Cross Trade** ci-dessous',
-              '**2.** Remplis le formulaire (jeu offert, items, jeu recherché)',
-              '**3.** Ton offre est publiée ici',
-              '**4.** Un autre joueur accepte → thread privé créé automatiquement',
-              '',
-              '> 🎮 Jeux supportés : MM2, Adopt Me, Blox Fruits, Blade Ball, et plus',
-              '> ✅ Vérifie bien les valeurs avant de trader',
-              '> 🛡️ Middleman disponible sur demande',
-            ].join('\n'))
-            .setFooter({ text: 'Wenzy Bot v9.0  •  Cross Trades' })
-            .setTimestamp()
-          ],
-          components: [new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('btn_post_cross').setLabel('🔀 Poster un Cross Trade').setStyle(ButtonStyle.Primary),
-          )],
-        });
-
-        return interaction.editReply(`✅ Panel Cross Trade envoyé dans <#${ctCh.id}> !`);
-      }
-
-      // ── POST ───────────────────────────────────────────────
-      if (sub === 'post') {
-        if (isBlacklisted(interaction.user.id)) return interaction.editReply('❌ Tu es blacklisté des trades.');
-
-        const offerGame  = interaction.options.getString('offre-jeu');
-        const offerItems = interaction.options.getString('offre-items');
-        const wantGame   = interaction.options.getString('cherche-jeu');
-        const wantItems  = interaction.options.getString('cherche-items');
-
-        const ctCh = cfg?.cross_trade_channel
-          ? guild.channels.cache.get(cfg.cross_trade_channel)
-          : guild.channels.cache.find(c => c.name.includes('cross-trade') || c.name.includes('crosstrade'));
-
-        if (!ctCh) return interaction.editReply('❌ Aucun salon Cross Trade configuré. Demande au staff.');
-
-        db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(interaction.user.id);
-        const res = db.prepare(
-          'INSERT INTO cross_trades (poster_id,offer_game,offer_items,want_game,want_items) VALUES (?,?,?,?,?)'
-        ).run(interaction.user.id, offerGame, offerItems, wantGame, wantItems);
-        const ctId = res.lastInsertRowid;
-
-        const msg = await ctCh.send({
-          embeds: [new EmbedBuilder()
-            .setColor(0x9B59B6)
-            .setAuthor({ name: `🔀 Cross Trade #CT${ctId}` })
-            .addFields(
-              { name: `📤 ${offerGame} — J'offre`, value: offerItems, inline: true },
-              { name: `📥 ${wantGame} — Je cherche`, value: wantItems, inline: true },
-              { name: '👤 Trader', value: `<@${interaction.user.id}>`, inline: false },
-            )
-            .setFooter({ text: `CT#${ctId} • Wenzy Bot v9.0` })
-            .setTimestamp()
-          ],
-          components: [new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('ct_accept').setLabel('✅ Accepter').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('ct_mm').setLabel('🛡️ Middleman').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('ct_cancel').setLabel('❌ Annuler').setStyle(ButtonStyle.Danger),
-          )],
-        });
-
-        db.prepare('UPDATE cross_trades SET message_id=?, channel_id=? WHERE id=?').run(msg.id, ctCh.id, ctId);
-        return interaction.editReply(`✅ Cross Trade **#CT${ctId}** posté dans <#${ctCh.id}> !`);
-      }
-    }
-  },
-
   // /addserver
   {
     data: new SlashCommandBuilder().setName('addserver').setDescription('🎮 (Admin) Ajouter serveur privé MM2').addStringOption(o=>o.setName('lien').setDescription('Lien Roblox').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
@@ -4041,6 +4030,256 @@ const commands = [
   },
 
   // ══════════════════════════════════════════════════════════════
+  //  CROSS TRADE COMMANDS
+  // ══════════════════════════════════════════════════════════════
+
+  // ── /crosstrade ────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName('crosstrade')
+      .setDescription('🔀 Système de Cross Trade (échange inter-jeux)')
+      .addSubcommand(s => s.setName('setup').setDescription('🏗️ Crée la catégorie Cross Trade complète (admin)'))
+      .addSubcommand(s => s.setName('post').setDescription('📤 Poster un cross trade').addStringOption(o => o.setName('offre-jeu').setDescription('Jeu que tu offres (ex: MM2, Adopt Me, Jailbreak)').setRequired(true)).addStringOption(o => o.setName('offre-items').setDescription('Items/objets offerts').setRequired(true)).addStringOption(o => o.setName('cherche-jeu').setDescription('Jeu que tu cherches').setRequired(true)).addStringOption(o => o.setName('cherche-items').setDescription('Items/objets recherchés').setRequired(true)))
+      .addSubcommand(s => s.setName('cancel').setDescription('❌ Annuler ton cross trade').addIntegerOption(o => o.setName('id').setDescription('ID du cross trade').setRequired(true))),
+
+    async execute(interaction) {
+      const sub = interaction.options.getSubcommand();
+
+      // ── SETUP ─────────────────────────────────────────────
+      if (sub === 'setup') {
+        await interaction.deferReply({ ephemeral: true });
+        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return interaction.editReply('❌ Réservé aux administrateurs.');
+        }
+
+        const guild = interaction.guild;
+        const log = [];
+        const everyone = guild.id;
+
+        // Rôles staff existants (réutilisés du serveur)
+        const staffRoleNames = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Superviseur Staff','Chef Admins','Admins','Chef Modérateurs','Capitaine Modérateurs','Haut Modérateurs','Modérateurs','Middleman'];
+        const staffRoles = staffRoleNames.map(n => guild.roles.cache.find(r => r.name === n)).filter(Boolean);
+
+        // ── Vérif si catégorie déjà existante ──
+        const existingCat = guild.channels.cache.find(c =>
+          c.type === ChannelType.GuildCategory && c.name.includes('Cross Trade')
+        );
+        if (existingCat) {
+          return interaction.editReply('⚠️ La catégorie **Côté Cross Trade** existe déjà ! Supprime-la d\'abord si tu veux la recréer.');
+        }
+
+        // ── Créer la catégorie ──
+        const ctCat = await guild.channels.create({
+          name: '🔀 Côté Cross Trade',
+          type: ChannelType.GuildCategory,
+          permissionOverwrites: [{ id: everyone, allow: [PermissionFlagsBits.ViewChannel] }],
+        }).catch(e => { log.push(`❌ Catégorie: ${e.message}`); return null; });
+
+        if (!ctCat) return interaction.editReply(log.join('\n'));
+        log.push('✅ Catégorie 🔀 Côté Cross Trade créée');
+
+        // ── Helper création salon ──
+        const ctChannels = {};
+        const mkCh = async (name, opts = {}) => {
+          const pow = [];
+          if (opts.staff) {
+            pow.push({ id: everyone, deny: [PermissionFlagsBits.ViewChannel] });
+            for (const r of staffRoles) pow.push({ id: r.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] });
+          } else if (opts.readonly) {
+            pow.push({ id: everyone, allow: [PermissionFlagsBits.ViewChannel], deny: [PermissionFlagsBits.SendMessages] });
+            for (const r of staffRoles) pow.push({ id: r.id, allow: [PermissionFlagsBits.SendMessages] });
+          } else {
+            pow.push({ id: everyone, allow: [PermissionFlagsBits.ViewChannel] });
+          }
+          const ch = await guild.channels.create({
+            name, type: ChannelType.GuildText, parent: ctCat.id,
+            permissionOverwrites: pow.length ? pow : undefined,
+          }).catch(e => { log.push(`❌ ${name}: ${e.message}`); return null; });
+          if (ch) { ctChannels[name] = ch; log.push(`  ✅ ${name}`); }
+          return ch;
+        };
+
+        await mkCh('📋┃ct-updates',         { readonly: true });
+        await mkCh('🔀┃ct-post-trades',      { readonly: true });
+        await mkCh('📬┃ct-poster-un-trade');
+        await mkCh('💰┃ct-valeurs');
+        await mkCh('🏆┃ct-vouches',          { readonly: true });
+        await mkCh('🛡️┃ct-middleman-panel', { staff: true });
+        await mkCh('❓┃ct-faq',              { readonly: true });
+
+        // ── EMBED ct-updates ──
+        const ctUpdates = ctChannels['📋┃ct-updates'];
+        if (ctUpdates) {
+          await ctUpdates.send({
+            embeds: [new EmbedBuilder().setColor(0x9B59B6)
+              .setAuthor({ name: '📋 Cross Trade — Updates', iconURL: guild.iconURL() ?? undefined })
+              .setDescription([
+                '> Les mises à jour et annonces du système Cross Trade apparaissent ici.',
+                '',
+                '**🔀 Qu\'est-ce que le Cross Trade ?**',
+                '→ Échange d\'objets entre différents jeux Roblox.',
+                '→ Exemple : **MM2 → Adopt Me**, **Jailbreak → Blox Fruits**, etc.',
+                '',
+                '> Active les notifications 🔔 pour ne rien manquer !',
+              ].join('\n'))
+              .setFooter({ text: `${guild.name} • Wenzy Bot v9.0` })
+              .setTimestamp()],
+          }).catch(() => {});
+          log.push('✅ Embed ct-updates');
+        }
+
+        // ── EMBED ct-poster-un-trade ──
+        const ctPosterCh = ctChannels['📬┃ct-poster-un-trade'];
+        if (ctPosterCh) {
+          await ctPosterCh.send({
+            embeds: [new EmbedBuilder().setColor(0x9B59B6)
+              .setAuthor({ name: '📬 Poster un Cross Trade' })
+              .setDescription([
+                'Clique sur le bouton pour poster un cross trade inter-jeux.',
+                '',
+                '**📋 Infos requises :**',
+                '• Jeu que tu offres _(ex: MM2, Adopt Me, Jailbreak)_',
+                '• Items / objets offerts _(séparés par virgules)_',
+                '• Jeu que tu cherches',
+                '• Items / objets recherchés',
+                '',
+                '> 🔀 Le cross trade sera publié dans **#ct-post-trades** automatiquement.',
+                '> ⚠️ Sois précis sur les valeurs pour éviter les malentendus.',
+              ].join('\n'))
+              .setFooter({ text: 'Wenzy Bot v9.0 • Cross Trade' })],
+            components: [new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId('btn_post_cross_trade').setLabel('🔀 Poster un Cross Trade').setStyle(ButtonStyle.Primary),
+            )],
+          }).catch(() => {});
+          log.push('✅ Embed ct-poster-un-trade');
+        }
+
+        // ── EMBED ct-valeurs ──
+        const ctValeursCh = ctChannels['💰┃ct-valeurs'];
+        if (ctValeursCh) {
+          await ctValeursCh.send({
+            embeds: [new EmbedBuilder().setColor(0xF0B232)
+              .setAuthor({ name: '💰 Valeurs Cross Trade — Guide' })
+              .setDescription([
+                '> **Référence pour évaluer la valeur des items avant d\'échanger.**',
+                '',
+                '**🔀 Jeux supportés :**',
+                '┣ 🗡️ **MM2** — Murder Mystery 2',
+                '┣ 🐾 **Adopt Me** — Pets & Véhicules',
+                '┣ 🚗 **Jailbreak** — Véhicules & Accès',
+                '┣ ⚔️ **Blox Fruits** — Fruits & Items',
+                '┗ 🎮 **Autres** — Sur discussion',
+                '',
+                '**💡 Conseils :**',
+                '┣ Vérifie la valeur sur les sites de référence de chaque jeu',
+                '┣ Prends un **screenshot** à chaque étape du trade',
+                '┣ Utilise le **middleman** pour les gros trades',
+                '┗ En cas de doute → ouvre un ticket',
+              ].join('\n'))
+              .setFooter({ text: `${guild.name} • Wenzy Bot v9.0` })
+              .setTimestamp()],
+          }).catch(() => {});
+          log.push('✅ Embed ct-valeurs');
+        }
+
+        // ── EMBED ct-vouches ──
+        const ctVouchesCh = ctChannels['🏆┃ct-vouches'];
+        if (ctVouchesCh) {
+          await ctVouchesCh.send({
+            embeds: [new EmbedBuilder().setColor(0x57F287)
+              .setAuthor({ name: '🏆 Cross Trade — Vouches & Preuves' })
+              .setDescription([
+                '> **Preuves des cross trades validés apparaissent ici.**',
+                '',
+                '**📸 Format attendu :**',
+                '→ Screenshot de la transaction dans **chaque jeu**',
+                '→ Le staff valide après réception des 2 screenshots',
+                '',
+                '> ✅ Vouch automatique après validation staff.',
+              ].join('\n'))
+              .setFooter({ text: `${guild.name} • Wenzy Bot v9.0` })
+              .setTimestamp()],
+          }).catch(() => {});
+          log.push('✅ Embed ct-vouches');
+        }
+
+        // ── EMBED ct-faq ──
+        const ctFaqCh = ctChannels['❓┃ct-faq'];
+        if (ctFaqCh) {
+          await ctFaqCh.send({
+            embeds: [new EmbedBuilder().setColor(0xFEE75C)
+              .setAuthor({ name: '❓ FAQ — Cross Trade', iconURL: guild.iconURL() ?? undefined })
+              .setDescription([
+                '**Q : C\'est quoi un Cross Trade ?**',
+                '→ Échanger des items entre deux jeux Roblox différents (ex: arme MM2 contre pet Adopt Me).',
+                '',
+                '**Q : Est-ce sûr ?**',
+                '→ Utilise toujours le middleman pour les trades importants. Screenshots obligatoires.',
+                '',
+                '**Q : Comment savoir la valeur d\'un item ?**',
+                '→ Consulte **#ct-valeurs** et les sites de référence de chaque jeu.',
+                '',
+                '**Q : J\'ai été scammé ?**',
+                '→ Ouvre un ticket **💀 Scam** avec tes preuves (screenshots, vidéo).',
+                '',
+                '**Q : Quels jeux sont acceptés ?**',
+                '→ Tous les jeux Roblox avec trading. Mentionne le jeu dans ton annonce.',
+              ].join('\n'))
+              .setFooter({ text: `${guild.name} • Wenzy Bot v9.0` })
+              .setTimestamp()],
+          }).catch(() => {});
+          log.push('✅ Embed ct-faq');
+        }
+
+        const summary = [
+          `✅ **Setup Cross Trade terminé !**`,
+          '',
+          `📁 Catégorie : **🔀 Côté Cross Trade**`,
+          `📋 Salons créés : **${Object.keys(ctChannels).length}**`,
+          '',
+          '**Salons :**',
+          ...Object.keys(ctChannels).map(n => `  → ${n}`),
+          '',
+          '> Utilise `/crosstrade post` ou le bouton dans **#ct-poster-un-trade** pour poster !',
+        ].join('\n');
+
+        return interaction.editReply({ content: summary });
+      }
+
+      // ── POST ──────────────────────────────────────────────
+      if (sub === 'post') {
+        await interaction.deferReply({ ephemeral: true });
+        const offreJeu    = interaction.options.getString('offre-jeu');
+        const offreItems  = interaction.options.getString('offre-items');
+        const chercheJeu  = interaction.options.getString('cherche-jeu');
+        const chercheItems = interaction.options.getString('cherche-items');
+        return postCrossTrade(interaction, offreJeu, offreItems, chercheJeu, chercheItems);
+      }
+
+      // ── CANCEL ────────────────────────────────────────────
+      if (sub === 'cancel') {
+        await interaction.deferReply({ ephemeral: true });
+        const ctId = interaction.options.getInteger('id');
+        const ct = db.prepare('SELECT * FROM cross_trades WHERE id=? AND poster_id=?').get(ctId, interaction.user.id);
+        if (!ct) return interaction.editReply('❌ Cross trade introuvable ou tu n\'en es pas le posteur.');
+        if (ct.status !== 'open') return interaction.editReply('❌ Ce cross trade ne peut plus être annulé (déjà accepté ou terminé).');
+        db.prepare('UPDATE cross_trades SET status=? WHERE id=?').run('cancelled', ctId);
+        // Supprimer le message si possible
+        if (ct.message_id && ct.channel_id) {
+          try {
+            const ch = await interaction.guild.channels.fetch(ct.channel_id).catch(() => null);
+            if (ch) {
+              const msg = await ch.messages.fetch(ct.message_id).catch(() => null);
+              if (msg) await msg.delete().catch(() => {});
+            }
+          } catch {}
+        }
+        return interaction.editReply(`✅ Cross trade **#CT${ctId}** annulé.`);
+      }
+    }
+  },
+
+  // ══════════════════════════════════════════════════════════════
   //  CASINO COMMANDS
   // ══════════════════════════════════════════════════════════════
 
@@ -4507,6 +4746,103 @@ async function handleButton(interaction) {
   }
   if (customId === 'btn_verify_now') { await interaction.deferReply({ ephemeral:true }); return doVerify(interaction); }
 
+  // ── Bouton poster un Cross Trade ─────────────────────────
+  if (customId === 'btn_post_cross_trade') {
+    const modal = new ModalBuilder().setCustomId('modal_post_cross_trade').setTitle('🔀 Poster un Cross Trade');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ct_offre_jeu').setLabel('Jeu que tu offres').setStyle(TextInputStyle.Short).setPlaceholder('ex: MM2 / Adopt Me / Jailbreak / Blox Fruits').setRequired(true).setMaxLength(50)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ct_offre_items').setLabel('Items / objets offerts').setStyle(TextInputStyle.Paragraph).setPlaceholder('ex: Chroma Seer + Corrupt (255 val MM2)').setRequired(true).setMaxLength(500)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ct_cherche_jeu').setLabel('Jeu que tu cherches').setStyle(TextInputStyle.Short).setPlaceholder('ex: Adopt Me / Jailbreak / Blox Fruits').setRequired(true).setMaxLength(50)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ct_cherche_items').setLabel('Items / objets recherchés').setStyle(TextInputStyle.Paragraph).setPlaceholder('ex: Neon Dragon (FR) ou valeur équivalente').setRequired(true).setMaxLength(500)),
+    );
+    return interaction.showModal(modal);
+  }
+
+  // ── Staff : valider un cross trade (depuis ct-middleman-panel) ──
+  if (customId.startsWith('ct_staff_validate_')) {
+    await interaction.deferReply({ ephemeral: true });
+    if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
+    const ctId = parseInt(customId.replace('ct_staff_validate_', ''));
+    const ct = db.prepare('SELECT * FROM cross_trades WHERE id=?').get(ctId);
+    if (!ct) return interaction.editReply('❌ Cross trade introuvable.');
+    if (ct.status === 'completed') return interaction.editReply('⚠️ Déjà complété.');
+
+    db.prepare('UPDATE cross_trades SET status=?, completed_at=strftime(\'%s\',\'now\'), middleman_id=? WHERE id=?')
+      .run('completed', user.id, ctId);
+
+    // XP + coins pour les deux parties
+    for (const uid of [ct.poster_id, ct.accepter_id].filter(Boolean)) {
+      db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(uid);
+      db.prepare('UPDATE users SET trade_count=trade_count+1, coins=coins+50 WHERE discord_id=?').run(uid);
+      await addXp(guild, uid, 25).catch(() => {});
+    }
+
+    // Vouch dans ct-vouches
+    const ctVouchesCh = guild.channels.cache.find(c => c.name.includes('ct-vouches'));
+    if (ctVouchesCh) {
+      const vouchEmb = new EmbedBuilder()
+        .setColor(0x57F287)
+        .setAuthor({ name: `✅ CROSS TRADE #CT${String(ctId).padStart(4, '0')} COMPLÉTÉ` })
+        .setDescription(`<@${ct.poster_id}> × <@${ct.accepter_id ?? '?'}>`)
+        .addFields(
+          { name: `📤 Offre — ${ct.offer_game}`, value: ct.offer_items, inline: true },
+          { name: `📥 Reçu — ${ct.want_game}`, value: ct.want_items, inline: true },
+          { name: '🛡️ Validé par', value: `<@${user.id}>`, inline: false },
+          { name: '🎁 Gains', value: '+50 🪙 chacun | +1 trade | +25 XP', inline: false },
+          ...(ct.screenshot_url ? [{ name: '📸 Screenshot', value: `[Voir](${ct.screenshot_url})`, inline: false }] : []),
+        )
+        .setFooter({ text: 'Wenzy Bot v9.0 • Cross Trade' })
+        .setTimestamp();
+      if (ct.screenshot_url) vouchEmb.setImage(ct.screenshot_url);
+      await ctVouchesCh.send({ embeds: [vouchEmb] }).catch(() => {});
+    }
+
+    // Notifier le thread si présent
+    if (ct.thread_id) {
+      try {
+        const thr = await guild.channels.fetch(ct.thread_id).catch(() => null);
+        if (thr) {
+          await thr.send({
+            content: `<@${ct.poster_id}>${ct.accepter_id ? ` <@${ct.accepter_id}>` : ''}`,
+            embeds: [new EmbedBuilder().setColor(0x57F287)
+              .setAuthor({ name: `✅ Cross Trade #CT${ctId} validé par le staff !` })
+              .setDescription('🎉 Le trade est confirmé. +50 🪙 et +25 XP pour chaque partie.\nCe thread sera archivé dans 30 secondes.')
+              .setTimestamp()],
+          }).catch(() => {});
+          setTimeout(() => thr.setArchived(true, 'Cross trade complété').catch(() => {}), 30000);
+        }
+      } catch {}
+    }
+
+    await sendLog(guild, new EmbedBuilder().setColor(0x57F287)
+      .setAuthor({ name: `✅ Cross Trade #CT${ctId} validé` })
+      .addFields(
+        { name: 'Poster', value: `<@${ct.poster_id}>`, inline: true },
+        { name: 'Accepter', value: ct.accepter_id ? `<@${ct.accepter_id}>` : '—', inline: true },
+        { name: 'Staff', value: `<@${user.id}>`, inline: true },
+      ).setTimestamp());
+
+    return interaction.editReply(`✅ Cross trade **#CT${ctId}** validé et vouch envoyé dans **#ct-vouches** !`);
+  }
+
+  if (customId.startsWith('ct_staff_reject_')) {
+    await interaction.deferReply({ ephemeral: true });
+    if (!hasStaffPerm(interaction.member)) return interaction.editReply('❌ Réservé au staff.');
+    const ctId = parseInt(customId.replace('ct_staff_reject_', ''));
+    db.prepare('UPDATE cross_trades SET status=? WHERE id=?').run('disputed', ctId);
+    const ct = db.prepare('SELECT * FROM cross_trades WHERE id=?').get(ctId);
+    if (ct?.thread_id) {
+      try {
+        const thr = await guild.channels.fetch(ct.thread_id).catch(() => null);
+        if (thr) await thr.send(`❌ **Screenshot rejeté** par <@${user.id}>. Envoie un screenshot valide de la transaction.`).catch(() => {});
+      } catch {}
+    }
+    await sendLog(guild, new EmbedBuilder().setColor(0xED4245)
+      .setDescription(`🚨 **Cross Trade #CT${ctId}** rejeté / disputé par <@${user.id}>.`)
+      .setTimestamp());
+    return interaction.editReply(`⚠️ Cross trade **#CT${ctId}** rejeté.`);
+  }
+
   if (customId === 'btn_post_trade') {
     const modal = new ModalBuilder().setCustomId('modal_post_trade').setTitle('🗡️ Poster un Trade MM2');
     modal.addComponents(
@@ -4850,66 +5186,100 @@ async function handleButton(interaction) {
   if (customId.startsWith('mm_cancel_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_cancel_',''));db.prepare('UPDATE trades SET status=? WHERE id=?').run('cancelled',tid);db.prepare('UPDATE private_servers SET in_use=0,trade_id=NULL WHERE trade_id=?').run(tid);return interaction.editReply(`❌ Trade **#${tid}** annulé.`);}
   if (customId.startsWith('mm_report_')){await interaction.deferReply({ephemeral:true});const tid=parseInt(customId.replace('mm_report_',''));db.prepare('UPDATE trades SET status=? WHERE id=?').run('disputed',tid);await sendLog(guild,new EmbedBuilder().setColor(C.danger).setDescription(`🚨 **SCAM REPORT** — Trade **#${tid}** signalé par <@${user.id}>.`).setTimestamp());return interaction.editReply('🚨 Scam reporté.');}
 
-  // ── Bouton poster un cross trade ────────────────────────
-  if (customId === 'btn_post_cross') {
-    const modal = new ModalBuilder()
-      .setCustomId('modal_post_cross')
-      .setTitle('🔀 Poster un Cross Trade');
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('ct_offer_game').setLabel('Jeu de ce que tu offres (ex: MM2)').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('MM2, Adopt Me, Blox Fruits...')
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('ct_offer_items').setLabel('Items offerts (séparés par virgules)').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('Chroma Seer, Corrupt Seer...')
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('ct_want_game').setLabel('Jeu de ce que tu cherches').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('MM2, Adopt Me, Blox Fruits...')
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('ct_want_items').setLabel('Items recherchés (séparés par virgules)').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('Neon Dragon, Frost Dragon...')
-      ),
-    );
-    return interaction.showModal(modal);
-  }
-
   // ── Boutons Cross Trade ──────────────────────────────────
   if (customId === 'ct_accept') {
     await interaction.deferReply({ ephemeral: true });
-    // Trouver le cross trade par message_id
     const ct = db.prepare('SELECT * FROM cross_trades WHERE message_id=? AND channel_id=?').get(interaction.message.id, interaction.channel.id);
     if (!ct || ct.status !== 'open') return interaction.editReply('❌ Ce cross trade n\'est plus disponible.');
     if (ct.poster_id === user.id) return interaction.editReply('❌ Tu ne peux pas accepter ton propre trade.');
 
     db.prepare('UPDATE cross_trades SET accepter_id=?, status=? WHERE id=?').run(user.id, 'in_progress', ct.id);
 
-    // Créer un thread pour ce cross trade
+    // Mettre à jour l'embed dans ct-post-trades (marquer en cours)
+    try {
+      const inProgressEmb = new EmbedBuilder().setColor(0xFEE75C)
+        .setAuthor({ name: `⏳ CROSS TRADE #CT${String(ct.id).padStart(4,'0')} — EN COURS` })
+        .setDescription(`> <@${ct.poster_id}> × <@${user.id}>\n> Lancé <t:${ct.created_at}:R>`)
+        .addFields(
+          { name: `📤 ${ct.offer_game}`, value: ct.offer_items, inline: true },
+          { name: `📥 ${ct.want_game}`, value: ct.want_items, inline: true },
+        )
+        .setFooter({ text: 'Wenzy Bot v9.0 • Cross Trade' })
+        .setTimestamp();
+      await interaction.message.edit({ embeds: [inProgressEmb], components: [] }).catch(() => {});
+    } catch {}
+
+    // Créer un thread privé pour ce cross trade
     const thread = await interaction.channel.threads.create({
-      name: `🔀 CT#${ct.id} — ${interaction.guild.members.cache.get(ct.poster_id)?.user.username ?? 'Trader'} × ${interaction.user.username}`,
+      name: `🔀 CT#${String(ct.id).padStart(4,'0')} — ${interaction.guild.members.cache.get(ct.poster_id)?.user.username ?? 'Trader'} × ${user.username}`,
+      type: ChannelType.PrivateThread,
       autoArchiveDuration: 1440,
-      startMessage: interaction.message,
+      invitable: false,
     }).catch(() => null);
 
     if (thread) {
       db.prepare('UPDATE cross_trades SET thread_id=? WHERE id=?').run(thread.id, ct.id);
+      await thread.members.add(ct.poster_id).catch(() => {});
+      await thread.members.add(user.id).catch(() => {});
+
       await thread.send({
         content: `<@${ct.poster_id}> <@${user.id}>`,
         embeds: [new EmbedBuilder()
           .setColor(0x9B59B6)
-          .setAuthor({ name: `🔀 Cross Trade #CT${ct.id} — En cours` })
+          .setAuthor({ name: `🔀 CROSS TRADE EN COURS — #CT${String(ct.id).padStart(4,'0')}` })
           .addFields(
-            { name: `📤 ${ct.offer_game}`, value: ct.offer_items, inline: true },
-            { name: `📥 ${ct.want_game}`, value: ct.want_items, inline: true },
-            { name: '👤 Parties', value: `Vendeur : <@${ct.poster_id}>\nAcheteur : <@${user.id}>`, inline: false },
+            { name: `📤 Offre — ${ct.offer_game}`, value: ct.offer_items, inline: true },
+            { name: `📥 Recherche — ${ct.want_game}`, value: ct.want_items, inline: true },
+            { name: '👤 Parties', value: `Poster : <@${ct.poster_id}>\nAccepter : <@${user.id}>`, inline: false },
           )
-          .setDescription('Coordonnez-vous ici. Un middleman peut être appelé si besoin.')
-          .setFooter({ text: 'Wenzy Bot • Cross Trade' })
+          .setDescription([
+            '**📋 Pour finaliser le cross trade :**',
+            '1. Échangez dans chaque jeu respectif',
+            '2. Prenez un **screenshot** de chaque transaction',
+            '3. Envoyez les 2 screenshots ici',
+            '4. ⚠️ Un staff validera manuellement',
+            '',
+            '> Le vouch sera envoyé dans **#ct-vouches** après validation staff.',
+          ].join('\n'))
+          .setFooter({ text: 'Wenzy Bot v9.0 • Cross Trade' })
           .setTimestamp()],
         components: [new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`ct_complete_${ct.id}`).setLabel('✅ Trade complété').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`ct_complete_${ct.id}`).setLabel('✅ Trade complété (sans MM)').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`ct_dispute_${ct.id}`).setLabel('🚨 Scam report').setStyle(ButtonStyle.Danger),
         )],
-      });
+      }).catch(() => {});
+
+      // Notifier ct-middleman-panel
+      const ctMmPanel = guild.channels.cache.find(c => c.name.includes('ct-middleman-panel'));
+      if (ctMmPanel) {
+        const mmRole = guild.roles.cache.find(r => r.name === 'Middleman');
+        await ctMmPanel.send({
+          content: mmRole
+            ? `<@&${mmRole.id}> 📋 Cross Trade **#CT${String(ct.id).padStart(4,'0')}** démarré — en attente des screenshots`
+            : `📋 Cross Trade **#CT${String(ct.id).padStart(4,'0')}** démarré — en attente des screenshots`,
+          embeds: [new EmbedBuilder().setColor(0x9B59B6)
+            .setAuthor({ name: `⏳ CROSS TRADE #CT${String(ct.id).padStart(4,'0')} — EN COURS (screenshots attendus)` })
+            .addFields(
+              { name: '👤 Poster', value: `<@${ct.poster_id}>`, inline: true },
+              { name: '👤 Accepter', value: `<@${user.id}>`, inline: true },
+              { name: `📤 ${ct.offer_game}`, value: ct.offer_items, inline: false },
+              { name: `📥 ${ct.want_game}`, value: ct.want_items, inline: false },
+              { name: '📸 Screenshots', value: '⏳ Pas encore reçus — boutons de validation apparaîtront après', inline: false },
+              { name: '🔗 Thread', value: `<#${thread.id}>`, inline: true },
+            )
+            .setFooter({ text: 'Les boutons Valider/Rejeter arrivent avec le screenshot' })
+            .setTimestamp()],
+        }).catch(() => {});
+      }
     }
+
+    await sendLog(guild, new EmbedBuilder().setColor(0x9B59B6)
+      .setAuthor({ name: `🔀 Cross Trade #CT${ct.id} accepté` })
+      .addFields(
+        { name: 'Poster', value: `<@${ct.poster_id}>`, inline: true },
+        { name: 'Accepter', value: `<@${user.id}>`, inline: true },
+        { name: `${ct.offer_game} → ${ct.want_game}`, value: `${ct.offer_items} → ${ct.want_items}`, inline: false },
+      ).setTimestamp());
 
     await interaction.editReply(`✅ Tu as accepté le cross trade **#CT${ct.id}** ! Rendez-vous dans le thread.`);
     return;
@@ -5123,58 +5493,14 @@ async function handleModal(interaction) {
     return postTrade(interaction,interaction.user.id,offreStr,chercheStr,offreVal,chercheVal);
   }
 
-  if (customId === 'modal_post_cross') {
+  // ── Modal Cross Trade ─────────────────────────────────────
+  if (customId === 'modal_post_cross_trade') {
     await interaction.deferReply({ ephemeral: true });
-    if (isBlacklisted(interaction.user.id)) return interaction.editReply('❌ Tu es blacklisté des trades.');
-
-    const offerGame  = interaction.fields.getTextInputValue('ct_offer_game').trim();
-    const offerItems = interaction.fields.getTextInputValue('ct_offer_items').trim();
-    const wantGame   = interaction.fields.getTextInputValue('ct_want_game').trim();
-    const wantItems  = interaction.fields.getTextInputValue('ct_want_items').trim();
-
-    const guild = interaction.guild;
-    const cfg   = getConfig(guild.id);
-    const ctCh  = cfg?.cross_trade_channel
-      ? guild.channels.cache.get(cfg.cross_trade_channel)
-      : guild.channels.cache.find(c => c.name.includes('cross-trade') || c.name.includes('crosstrade'));
-
-    if (!ctCh) return interaction.editReply('❌ Aucun salon Cross Trade configuré. Demande au staff via `/panel channels type:🔀 Cross Trade`.');
-
-    db.prepare('INSERT OR IGNORE INTO users (discord_id) VALUES (?)').run(interaction.user.id);
-    const res = db.prepare(
-      'INSERT INTO cross_trades (poster_id,offer_game,offer_items,want_game,want_items) VALUES (?,?,?,?,?)'
-    ).run(interaction.user.id, offerGame, offerItems, wantGame, wantItems);
-    const ctId = res.lastInsertRowid;
-
-    const msg = await ctCh.send({
-      embeds: [new EmbedBuilder()
-        .setColor(0x9B59B6)
-        .setAuthor({ name: `🔀 Cross Trade #CT${ctId}` })
-        .addFields(
-          { name: `📤 ${offerGame} — J'offre`,    value: offerItems, inline: true },
-          { name: `📥 ${wantGame} — Je cherche`,  value: wantItems,  inline: true },
-          { name: '👤 Trader', value: `<@${interaction.user.id}>`, inline: false },
-        )
-        .setFooter({ text: `CT#${ctId} • Wenzy Bot v9.0` })
-        .setTimestamp()
-      ],
-      components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('ct_accept').setLabel('✅ Accepter').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('ct_mm').setLabel('🛡️ Middleman').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('ct_cancel').setLabel('❌ Annuler').setStyle(ButtonStyle.Danger),
-      )],
-    });
-
-    db.prepare('UPDATE cross_trades SET message_id=?, channel_id=? WHERE id=?').run(msg.id, ctCh.id, ctId);
-    await sendLog(guild, new EmbedBuilder()
-      .setColor(0x9B59B6)
-      .setAuthor({ name: `🔀 Nouveau Cross Trade #CT${ctId}` })
-      .addFields(
-        { name: `${offerGame} → ${wantGame}`, value: `${offerItems} → ${wantItems}`, inline: false },
-        { name: '👤 Poster', value: `<@${interaction.user.id}>`, inline: true },
-      ).setTimestamp()
-    );
-    return interaction.editReply(`✅ Cross Trade **#CT${ctId}** posté dans <#${ctCh.id}> !`);
+    const offreJeu    = interaction.fields.getTextInputValue('ct_offre_jeu');
+    const offreItems  = interaction.fields.getTextInputValue('ct_offre_items');
+    const chercheJeu  = interaction.fields.getTextInputValue('ct_cherche_jeu');
+    const chercheItems = interaction.fields.getTextInputValue('ct_cherche_items');
+    return postCrossTrade(interaction, offreJeu, offreItems, chercheJeu, chercheItems);
   }
 
   if (customId === 'modal_shop_role_custom') {
@@ -5458,24 +5784,69 @@ client.on(Events.MessageCreate, async message=>{
   }
 
   if (!message.channel.isThread()) return;
-  const trade=db.prepare('SELECT * FROM trades WHERE thread_id=? AND status=?').get(message.channel.id,'in_progress');if(!trade)return;
-  const attachment=message.attachments.find(a=>a.contentType?.startsWith('image/')||/\.(jpg|jpeg|png|webp)$/i.test(a.name??''));
-  if (!attachment) return;
-  if (![trade.poster_id,trade.accepter_id].includes(uid)) return;
-  if (trade.screenshot_verified===1) return;
-  db.prepare('UPDATE trades SET screenshot_url=? WHERE id=?').run(attachment.url,trade.id);
-  const gld=message.guild;
-  const mmPanel=gld?.channels.cache.find(c=>c.name.includes('middleman-panel'));
-  const staffRoles=['Wenzy','Madame Wenzy','Owners','Co-Owners','Admins','Modérateurs','Middleman'];
-  const staffMentions=staffRoles.map(rn=>gld?.roles.cache.find(r=>r.name===rn)).filter(Boolean).map(r=>`<@&${r.id}>`).join(' ');
-  await message.channel.send([`📸 **Screenshot reçu de <@${uid}>**`,'','⏳ En attente de validation par le **staff**...','','> Quand le staff validera, le screenshot sera automatiquement envoyé dans **#vouches**.'].join('\n'));
-  if (mmPanel) {
-    const off=JSON.parse(trade.offer_weapons);
-    await mmPanel.send({
-      content:`${staffMentions}\n📸 **Screenshot à vérifier — Trade #${String(trade.id).padStart(4,'0')}**`,
-      embeds:[new EmbedBuilder().setColor(C.warning).setAuthor({name:`📸 Vérification — Trade #${String(trade.id).padStart(4,'0')}`}).setImage(attachment.url).addFields({name:'👤 Poster',value:`<@${trade.poster_id}>`,inline:true},{name:'👤 Accepter',value:`<@${trade.accepter_id}>`,inline:true},{name:'📤 Offre',value:off.map(w=>`**${w.name}** \`${w.value}v\``).join('\n')||'—',inline:false},{name:'🔗 Thread',value:`<#${message.channel.id}>`,inline:true}).setFooter({text:'✅ Valider → screenshot envoyé dans #vouches | ❌ Rejeter'}).setTimestamp()],
-      components:[staffVerifyButtons(trade.id)],
-    });
+
+  // ── Screenshot MM2 trade ──
+  const trade=db.prepare('SELECT * FROM trades WHERE thread_id=? AND status=?').get(message.channel.id,'in_progress');
+  if(trade){
+    const attachment=message.attachments.find(a=>a.contentType?.startsWith('image/')||/\.(jpg|jpeg|png|webp)$/i.test(a.name??''));
+    if(attachment&&[trade.poster_id,trade.accepter_id].includes(uid)&&trade.screenshot_verified!==1){
+      db.prepare('UPDATE trades SET screenshot_url=? WHERE id=?').run(attachment.url,trade.id);
+      const gld=message.guild;
+      const mmPanel=gld?.channels.cache.find(c=>c.name.includes('middleman-panel')&&!c.name.includes('ct-'));
+      const staffRoles=['Wenzy','Madame Wenzy','Owners','Co-Owners','Admins','Modérateurs','Middleman'];
+      const staffMentions=staffRoles.map(rn=>gld?.roles.cache.find(r=>r.name===rn)).filter(Boolean).map(r=>`<@&${r.id}>`).join(' ');
+      await message.channel.send([`📸 **Screenshot reçu de <@${uid}>**`,'','⏳ En attente de validation par le **staff**...','','> Quand le staff validera, le screenshot sera automatiquement envoyé dans **#vouches**.'].join('\n'));
+      if(mmPanel){
+        const off=JSON.parse(trade.offer_weapons);
+        await mmPanel.send({
+          content:`${staffMentions}\n📸 **Screenshot à vérifier — Trade #${String(trade.id).padStart(4,'0')}**`,
+          embeds:[new EmbedBuilder().setColor(C.warning).setAuthor({name:`📸 Vérification — Trade #${String(trade.id).padStart(4,'0')}`}).setImage(attachment.url).addFields({name:'👤 Poster',value:`<@${trade.poster_id}>`,inline:true},{name:'👤 Accepter',value:`<@${trade.accepter_id}>`,inline:true},{name:'📤 Offre',value:off.map(w=>`**${w.name}** \`${w.value}v\``).join('\n')||'—',inline:false},{name:'🔗 Thread',value:`<#${message.channel.id}>`,inline:true}).setFooter({text:'✅ Valider → screenshot envoyé dans #vouches | ❌ Rejeter'}).setTimestamp()],
+          components:[staffVerifyButtons(trade.id)],
+        });
+      }
+    }
+    return;
+  }
+
+  // ── Screenshot Cross Trade ──
+  const ct = db.prepare('SELECT * FROM cross_trades WHERE thread_id=? AND status=?').get(message.channel.id, 'in_progress');
+  if (!ct) return;
+  const ctAttachment = message.attachments.find(a => a.contentType?.startsWith('image/') || /\.(jpg|jpeg|png|webp)$/i.test(a.name ?? ''));
+  if (!ctAttachment) return;
+  if (![ct.poster_id, ct.accepter_id].includes(uid)) return;
+
+  db.prepare('UPDATE cross_trades SET screenshot_url=? WHERE id=?').run(ctAttachment.url, ct.id);
+  const gld = message.guild;
+  const ctMmPanel = gld?.channels.cache.find(c => c.name.includes('ct-middleman-panel'));
+  const staffRoleNames = ['Wenzy','Madame Wenzy','Owners','Co-Owners','Admins','Modérateurs','Middleman'];
+  const ctStaffMentions = staffRoleNames.map(rn => gld?.roles.cache.find(r => r.name === rn)).filter(Boolean).map(r => `<@&${r.id}>`).join(' ');
+
+  await message.channel.send([
+    `📸 **Screenshot reçu de <@${uid}>**`,
+    '',
+    '⏳ En attente de validation par le **staff**...',
+    '',
+    '> Le staff validera le cross trade depuis **#ct-middleman-panel**.',
+  ].join('\n'));
+
+  if (ctMmPanel) {
+    await ctMmPanel.send({
+      content: `${ctStaffMentions}\n📸 **Screenshot Cross Trade à vérifier — #CT${String(ct.id).padStart(4, '0')}**`,
+      embeds: [new EmbedBuilder()
+        .setColor(0x9B59B6)
+        .setAuthor({ name: `📸 Vérification Cross Trade #CT${String(ct.id).padStart(4, '0')}` })
+        .setImage(ctAttachment.url)
+        .addFields(
+          { name: '👤 Poster', value: `<@${ct.poster_id}>`, inline: true },
+          { name: '👤 Accepter', value: `<@${ct.accepter_id ?? '?'}>`, inline: true },
+          { name: `📤 ${ct.offer_game}`, value: ct.offer_items, inline: false },
+          { name: `📥 ${ct.want_game}`, value: ct.want_items, inline: false },
+          { name: '🔗 Thread', value: `<#${message.channel.id}>`, inline: true },
+        )
+        .setFooter({ text: '✅ Valider → vouch dans #ct-vouches | ❌ Rejeter / Scam' })
+        .setTimestamp()],
+      components: [ctStaffButtons(ct.id)],
+    }).catch(() => {});
   }
 });
 
